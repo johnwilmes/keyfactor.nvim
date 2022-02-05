@@ -78,16 +78,23 @@ function commands.repeatable(map, count, register)
 end
 
 local function do_normal(cmd, remap)
-    remap = (remap and ' ') or '! '
     if cmd:lower():sub(1, #'<plug>') == '<plug>' then
         remap = true
     end
+    remap = (remap and ' ') or '! '
+    cmd = vim.api.nvim_replace_termcodes(cmd, true, true, true)
     vim.cmd('normal'..remap..cmd)
 end
 
-local function as_function(cmd)
+local function as_function(cmd, remap)
     if type(cmd) == "string" then
-        return function() do_normal(cmd) end
+        if cmd:lower():sub(1, #'<plug>') == '<plug>' then
+            remap = true
+        end
+        remap = (remap and 'm') or 'n'
+        local feedkeys_mode = remap..'ix!'
+        cmd = vim.api.nvim_replace_termcodes(cmd, true, true, true)
+        return function() vim.api.nvim_feedkeys(cmd, feedkeys_mode, false) end
     else
         return cmd
     end
@@ -292,14 +299,14 @@ commands.seek = (function()
         if vim.tbl_isempty(state) then
             return
         elseif reverse then
-            backward()
+            state.backward()
         else
-            forward()
+            state.forward()
         end
     end
 
     local motion = function(command, forward, backward)
-        do_command = as_function(command)
+        local do_command = as_function(command)
 
         return function()
             state = {forward=as_function(forward), backward=as_function(backward)}
@@ -339,16 +346,15 @@ function commands.do_visual(mode)
        (current_mode:sub(1,1) == 'v' and mode ~= 'v') or
        (current_mode:sub(1,1) == 'V' and mode ~= 'V') or
        (current_mode:sub(1,1) == CTRL_V and mode ~= CTRL_V) then
-        vim.api.nvim_feedkeys(mode, 'ni')
+        vim.api.nvim_feedkeys(mode, 'ni', false)
     end
 end
 
-local _shift = {h='H', j='J', k='K', l='L'}
 function commands.move_window(direction)
     current = vim.fn.winnr()
     target = vim.fn.winner(direction)
     if current == target then
-        do_normal('<C-w>'.._shift[direction])
+        do_normal('<C-w>'..direction:upper())
     else
         do_normal(target..'<C-w>x')
     end
