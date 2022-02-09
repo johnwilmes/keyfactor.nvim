@@ -5,6 +5,7 @@ local commands = require("keyfactor.commands")
 local telescope = require("telescope.builtin")
 
 local function normal(cmd, remap, keepjumps)
+    -- TODO fix this, it seems to not preserve count
     remap = (remap and ' ') or '! '
     keepjumps = (keepjumps and 'keepjumps ') or ''
     return '<Cmd>'..keepjumps..'normal'..remap..cmd..'<CR>'
@@ -56,16 +57,16 @@ function module.get_mappings(keyboard)
         {mode="i", {
             {k.left, '<C-g>U<Left>'},
             {k.right, '<C-g>U<Right>'},
-            {k.up, normal('gk')},
-            {k.down, normal('gj')},
-            {shift.left, normal('B')},
-            {shift.right, normal('E')},
-            {shift.up, normal('H')},
-            {shift.down, normal('L')},
-            {k.home, normal('^')},
-            {k.end_, normal('g_')},
-            {shift.home, normal('0')},
-            {shift.end_, normal('$')},
+            {k.up, 'gk'},
+            {k.down, 'gj'},
+            {shift.left, 'B'},
+            {shift.right, 'E'},
+            {shift.up, 'H'},
+            {shift.down, 'L'},
+            {k.home, '^'},
+            {k.end_, 'g_'},
+            {shift.home, '0'},
+            {shift.end_, '$'},
         }},
         
         {mode="ct", {
@@ -100,20 +101,20 @@ function module.get_mappings(keyboard)
             {alt.up, '<C-\\><C-n>:leftabove split<CR>'},
             {alt.down, '<C-\\><C-n>:rightbelow split<CR>'},
             -- Move windows, and if it is already at the end make it large
-            {super.left, function() commands.move_window('h') end},
-            {super.up, function() commands.move_window('k') end},
-            {super.down, function() commands.move_window('j') end},
-            {super.right, function() commands.move_window('l') end},
+            {shift_ctrl.left, function() commands.move_window('h') end},
+            {shift_ctrl.up, function() commands.move_window('k') end},
+            {shift_ctrl.down, function() commands.move_window('j') end},
+            {shift_ctrl.right, function() commands.move_window('l') end},
 
-            -- Move to next/prev tab
+            -- Move focus to next/prev tab
             {ctrl.page_up, '<C-\\><C-n>:-tabnext<CR>'},
             {ctrl.page_down, '<C-\\><C-n>:+tabnext<CR>'},
             -- Create new tab left/right
             {alt.page_up, '<C-\\><C-n>:-tab split<CR>'},
             {alt.page_down, '<C-\\><C-n>:tab split<CR>'},
             -- Swap tabs left/right
-            {super.page_up, '<C-\\><C-n>:-tabmove<CR>'},
-            {super.page_down, '<C-\\><C-n>:+tabmove<CR>'},
+            {shift_ctrl.page_up, '<C-\\><C-n>:-tabmove<CR>'},
+            {shift_ctrl.page_down, '<C-\\><C-n>:+tabmove<CR>'},
         }},
 
         -- Buffers
@@ -133,7 +134,7 @@ function module.get_mappings(keyboard)
             -- file browser
         }},
         
-        -- Exit
+        -- Exit TODO improve
         {mode='n', {
             {k.exit, ':bw<CR>'},
         }},
@@ -154,11 +155,11 @@ function module.get_mappings(keyboard)
         -- scroll
         -- TODO input mode
         {mode="nosx", {
-            {k.scroll, normal('<C-f>M', false, true)},
-            {shift.scroll, normal('<C-b>M', false, true)},
-            {k.linewise..k.scroll, normal('<C-e>')},
-            {k.linewise..shift.scroll, normal('<C-y>')},
-            {ctrl.scroll, normal('gg')},
+            {k.scroll, '<C-f>'},
+            {shift.scroll, '<C-b>'},
+            {k.linewise..k.scroll, '<C-e>'},
+            {k.linewise..shift.scroll, '<C-y>'},
+            {ctrl.scroll, 'gg'},
             {shift_ctrl.scroll, commands.go_to_neg_line},
             {alt.scroll, commands.fancy_percent},
             {shift_alt.scroll, function() commands.fancy_percent(true) end},
@@ -220,17 +221,16 @@ function module.get_mappings(keyboard)
             {k.jumps, '<C-o>'}, -- jumplist navigation
             {shift.jumps, '<C-i>'},
             {ctrl.jumps, '<C-t>'}, -- tag navigation TODO fix
-            {alt.jumps, normal('tag')},
+            {alt.jumps, '<Cmd>tag<CR>'},
             {super.jumps, '<C-]>'}, -- TODO should this be goto jumps?
         }},
         
-        -- Quickfix/Location Lists
-        -- {k.list, ...}
+        -- Quickfix/Location Lists TODO
+        {mode="nosx", {
+            {k.list, '<NOP>'},
+            {shift.list, '<NOP>'},
+        }},
         
-        -- Text objects
-        -- {k.object, ...}
-
-
         -- Goto
         -- TODO check with k.charwise
         -- TODO consistent shift treatmenet
@@ -269,7 +269,83 @@ function module.get_mappings(keyboard)
         }},
 
         -- Marks TODO
-        -- {k.mark, ...}
+        {mode="nosx", {
+            {k.mark, '<NOP>'},
+            {shift.mark, '<NOP>'},
+        }},
+
+        -- Text objects TODO
+        {mode="nosx", {
+            {shift.object, '<NOP>'},
+        }},
+        {k.object, {
+            {k.word, {
+                {mode="n", action='viw'},
+                {mode="osx", action='iw'},
+            }},
+            {ctrl.word, {
+                {mode="n", action='viW'},
+                {mode="osx", action='iW'},
+            }},
+            {'"', { -- DANGER mapped to char
+                {mode="n", action='vi"'},
+                {mode="osx", action='i"'},
+            }},
+            {'(', {
+                {mode="n", action='vi('},
+                {mode="osx", action='i('},
+            }},
+            {'[', {
+                {mode="n", action='vi['},
+                {mode="osx", action='i['},
+            }},
+            {'{', {
+                {mode="n", action='vi{'},
+                {mode="osx", action='i{'},
+            }},
+            {'<', {
+                {mode="n", action='vi<'},
+                {mode="osx", action='i<'},
+            }},
+            {'/', {
+                {mode="n", action='vit'},
+                {mode="osx", action='it'},
+            }},
+        }},
+        {ctrl.object, {
+            {k.word, {
+                {mode="n", action='vaw'},
+                {mode="osx", action='aw'},
+            }},
+            {ctrl.word, {
+                {mode="n", action='vaW'},
+                {mode="osx", action='aW'},
+            }},
+            {'"', { -- DANGER mapped to char
+                {mode="n", action='va"'},
+                {mode="osx", action='a"'},
+            }},
+            {'(', {
+                {mode="n", action='va('},
+                {mode="osx", action='a('},
+            }},
+            {'[', {
+                {mode="n", action='va['},
+                {mode="osx", action='a['},
+            }},
+            {'{', {
+                {mode="n", action='va{'},
+                {mode="osx", action='a{'},
+            }},
+            {'<', {
+                {mode="n", action='va<'},
+                {mode="osx", action='a<'},
+            }},
+            {'/', {
+                {mode="n", action='vat'},
+                {mode="osx", action='at'},
+            }},
+        }},
         
         -------------
         -- ACTIONS --
@@ -357,6 +433,7 @@ function module.get_mappings(keyboard)
         {mode='sx', k.yank, 'y'},
 
         -- Surround
+        -- TODO replace with machakann/vim-sandwich?
         {mode='n', {
             {k.surround, '<Plug>Ysurround'},
             {k.linewise..k.surround, '<Plug>Yssurround'},
@@ -447,7 +524,7 @@ function module.get_mappings(keyboard)
             {shift.undo, '<C-r>'},
         }},
 
-        -- Register
+        -- Register TODO improve
         {mode='nsx', {
             {k.register, '"'},
         }},
@@ -456,7 +533,27 @@ function module.get_mappings(keyboard)
         {k.command, ':', mode='n', silent=false},
         -- {alt.command, TODO do vim standard mapping}, 
 
-        -- Fold
+        -- Layers TODO
+        {mode="nosx", {
+            {k.layer_operator, '<NOP>'},
+            {shift.layer_operator, '<NOP>'},
+        }},
+        {mode="nosx", {
+            {k.layer_action, '<NOP>'},
+            {shift.layer_action, '<NOP>'},
+        }},
+        {mode="nosx", {
+            {k.layer_motion, '<NOP>'},
+            {shift.layer_motion, '<NOP>'},
+        }},
+        {mode="nosx", {
+            {k.layer_leader, '<NOP>'},
+            {shift.layer_leader, '<NOP>'},
+        }},
+
+
+        -- Fold TODO
+        -- TODO implement as transient nav layer?
         -- TODO set foldmethod to indent?
         --{k.operator..k.fold, 'zf'}, -- create a fold when foldmethod is manual/marker
         --{k.linewise..k.operator..k.fold, 'zF'},

@@ -95,11 +95,6 @@ function module.parse(map_table)
             index = 2
         end
 
-        -- If there is nothing to do, quit with an error
-        if #map_table < index then
-            error("No mapping specified for prefix "..context.prefix)
-        end
-
         -- Combine everything into new contexts
         if keys then
             for _, sequence in ipairs(keys) do
@@ -112,32 +107,36 @@ function module.parse(map_table)
         end
 
         -- Process the action, if there is any
-        if keys then
-            local action = nil
-            if map_table.action ~= nil then
-                action = map_table.action
-            elseif is_action(map_table[index]) then
-                action = map_table[index]
-                index = index + 1
-            end
-            if action ~= nil then
-                for _, c in ipairs(new_contexts) do
-                    local keycodes = utils.string.split_keycodes(c.prefix)
-                    for _, m in ipairs(c.mode) do
-                        -- Store it in the result trie so we can apply it later
-                        local trie = result:get({m}):get(keycodes)
-                        local keymap_opts = {
-                            nowait = not c.wait,
-                            noremap = not c.remap,
-                            silent = c.silent,
-                            expr = c.expr,
-                        }
-                        local rhs = get_rhs(action)
-                        if rhs:lower():sub(1, #'<plug>') == '<plug>' then
-                            keymap_opts.noremap = false
-                        end
-                        trie.value = {rhs=rhs, opts=keymap_opts}
+        local action = nil
+        if map_table.action ~= nil then
+            action = map_table.action
+        elseif is_action(map_table[index]) then
+            action = map_table[index]
+            index = index + 1
+        end
+
+        -- If there is nothing to do, quit with an error
+        if (#map_table < index) and (action == nil) then
+            error("No mapping specified for prefix "..context.prefix)
+        end
+
+        if action ~= nil then
+            for _, c in ipairs(new_contexts) do
+                local keycodes = utils.string.split_keycodes(c.prefix)
+                for _, m in ipairs(c.mode) do
+                    -- Store it in the result trie so we can apply it later
+                    local trie = result:get({m}):get(keycodes)
+                    local keymap_opts = {
+                        nowait = not c.wait,
+                        noremap = not c.remap,
+                        silent = c.silent,
+                        expr = c.expr,
+                    }
+                    local rhs = get_rhs(action)
+                    if rhs:lower():sub(1, #'<plug>') == '<plug>' then
+                        keymap_opts.noremap = false
                     end
+                    trie.value = {rhs=rhs, opts=keymap_opts}
                 end
             end
         end

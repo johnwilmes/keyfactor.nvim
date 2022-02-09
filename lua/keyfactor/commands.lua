@@ -128,7 +128,6 @@ end
 commands.go_to_neg_line = function()
     local count = vim.v.count
     line = vim.api.nvim_buf_line_count(0)-count
-    if count == 0 then line = '' end
     do_normal(tostring(line).."gg")
 end
 
