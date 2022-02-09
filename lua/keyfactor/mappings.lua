@@ -589,9 +589,7 @@ function module.get_mappings(keyboard)
         --]]
 
         -- Select
-        --[[
         {k.select_, {
-            {k.select_, telescope.builtin},
             {k.command, telescope.command_history},
             {k.register, telescope.registers},
             {k.mark, telescope.marks},
@@ -602,7 +600,7 @@ function module.get_mappings(keyboard)
             {k.search, telescope.search_history},
             --{k.spell, telescope.spell_suggest},
             {k.code, telescope.treesitter},
-            {k.buffer, telescope.buffers},
+            --{k.buffer, telescope.buffers},
 
             -- {k.word, hop word},
             -- {k.WORD, hop WORD},
