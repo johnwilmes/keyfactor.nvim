@@ -102,4 +102,29 @@ function utils.buffer_less(tuple1, tuple2)
     end
 end
 
+function utils.mapping_encode(key, modifiers)
+    local config = require("keyfactor.config")
+
+    modifiers = modifiers or {}
+    if modifiers.S and #key == 1 then
+        local index , _ = config.unshifted:find(key)
+        if index then
+            key = config.shifted:sub(index,index)
+            modifiers.S = nil
+        end
+    end
+
+    local sys_encoded = config.system_encode(key, modifiers)
+    if sys_encoded then return sys_encoded end
+    if vim.tbl_isempty(modifiers) then return key end
+
+    if #key == 1 then
+        key = ("<%s>"):format(key)
+    end
+    for mod, _ in pairs(modifiers) do
+        key = ("<%s-%s"):format(mod, key:sub(2))
+    end
+    return key
+end
+
 return utils

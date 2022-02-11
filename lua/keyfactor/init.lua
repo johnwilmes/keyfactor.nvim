@@ -187,9 +187,15 @@ function module.apply(map_table)
     end
 end
 
-function module.initialize(keyboard)
-    local map_table = require("keyfactor.mappings").get_mappings(keyboard)
+function module.initialize()
+    local map_table = require("keyfactor.mappings").get_mappings()
     module.apply(map_table)
 end
+
+function module.setup(options)
+    require("keyfactor.config").set(options)
+end
+
+module.mapping_encode = utils.mapping_encode
 
 return module

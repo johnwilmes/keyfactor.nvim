@@ -1,11 +1,12 @@
 local module = {}
 
+local config = require("keyfactor.config")
 local utils = require("keyfactor.utils")
-local commands = require("keyfactor.commands")
+local actions = require("keyfactor.actions")
 local telescope = require("telescope.builtin")
 
-local function normal(cmd, remap, keepjumps)
-    -- TODO fix this, it seems to not preserve count
+local function normal(cmd, keepjumps, remap)
+    -- TODO try to preserve count?
     remap = (remap and ' ') or '! '
     keepjumps = (keepjumps and 'keepjumps ') or ''
     return '<Cmd>'..keepjumps..'normal'..remap..cmd..'<CR>'
@@ -13,15 +14,15 @@ end
 
 
 -- TODO fix all the modes
-function module.get_mappings(keyboard)
-    local k = vim.tbl_map(function(x) return keyboard.get(x, {}) end, keyboard.keys)
-    local shift = vim.tbl_map(function(x) return keyboard.get(x, {S=true}) end, keyboard.keys)
-    local ctrl = vim.tbl_map(function(x) return keyboard.get(x, {C=true}) end, keyboard.keys)
-    local alt = vim.tbl_map(function(x) return keyboard.get(x, {A=true}) end, keyboard.keys)
-    local super = vim.tbl_map(function(x) return keyboard.get(x, {D=true}) end, keyboard.keys)
-    local shift_ctrl = vim.tbl_map(function(x) return keyboard.get(x, {S=true, C=true}) end, keyboard.keys)
-    local shift_alt = vim.tbl_map(function(x) return keyboard.get(x, {S=true, A=true}) end, keyboard.keys)
-    local shift_super = vim.tbl_map(function(x) return keyboard.get(x, {S=true, D=true}) end, keyboard.keys)
+function module.get_mappings()
+    local k = vim.tbl_map(function(x) return utils.mapping_encode(x, {}) end, config.keys)
+    local shift = vim.tbl_map(function(x) return utils.mapping_encode(x, {S=true}) end, config.keys)
+    local ctrl = vim.tbl_map(function(x) return utils.mapping_encode(x, {C=true}) end, config.keys)
+    local alt = vim.tbl_map(function(x) return utils.mapping_encode(x, {A=true}) end, config.keys)
+    local super = vim.tbl_map(function(x) return utils.mapping_encode(x, {D=true}) end, config.keys)
+    local shift_ctrl = vim.tbl_map(function(x) return utils.mapping_encode(x, {S=true, C=true}) end, config.keys)
+    local shift_alt = vim.tbl_map(function(x) return utils.mapping_encode(x, {S=true, A=true}) end, config.keys)
+    local shift_super = vim.tbl_map(function(x) return utils.mapping_encode(x, {S=true, D=true}) end, config.keys)
 
     local mappings = {
         ----------------
@@ -37,9 +38,9 @@ function module.get_mappings(keyboard)
             {shift.left, 'B'},
             {shift.right, 'E'},
             
-            {k.up, function() commands.fancy_vert(true) end},
+            {k.up, function() actions.fancy_vert(true) end},
             {k.wrap..k.up, 'gk'},
-            {k.down, commands.fancy_vert},
+            {k.down, actions.fancy_vert},
             {k.wrap..k.down, 'gj'},
             -- doesn't quite rhyme here, but feels worse elsewhere
             {shift.up, 'H'},
@@ -57,16 +58,16 @@ function module.get_mappings(keyboard)
         {mode="i", {
             {k.left, '<C-g>U<Left>'},
             {k.right, '<C-g>U<Right>'},
-            {k.up, 'gk'},
-            {k.down, 'gj'},
-            {shift.left, 'B'},
-            {shift.right, 'E'},
-            {shift.up, 'H'},
-            {shift.down, 'L'},
-            {k.home, '^'},
-            {k.end_, 'g_'},
-            {shift.home, '0'},
-            {shift.end_, '$'},
+            {k.up, normal('gk')},
+            {k.down, normal('gj')},
+            {shift.left, normal('B')},
+            {shift.right, normal('E')},
+            {shift.up, normal('H')},
+            {shift.down, normal('L')},
+            {k.home, normal('^')},
+            {k.end_, normal('g_')},
+            {shift.home, normal('0')},
+            {shift.end_, normal('$')},
         }},
         
         {mode="ct", {
@@ -96,38 +97,38 @@ function module.get_mappings(keyboard)
             {ctrl.up, '<C-\\><C-n><C-w>k'},
             {ctrl.down, '<C-\\><C-n><C-w>j'},
             -- Split new window
-            {alt.left, '<C-\\><C-n>:vertical leftabove split<CR>'},
-            {alt.right, '<C-\\><C-n>:vertical rightbelow split<CR>'},
-            {alt.up, '<C-\\><C-n>:leftabove split<CR>'},
-            {alt.down, '<C-\\><C-n>:rightbelow split<CR>'},
+            {alt.left, '<C-\\><C-n><Cmd>vertical leftabove split<CR>'},
+            {alt.right, '<C-\\><C-n><Cmd>vertical rightbelow split<CR>'},
+            {alt.up, '<C-\\><C-n><Cmd>leftabove split<CR>'},
+            {alt.down, '<C-\\><C-n><Cmd>rightbelow split<CR>'},
             -- Move windows, and if it is already at the end make it large
-            {shift_ctrl.left, function() commands.move_window('h') end},
-            {shift_ctrl.up, function() commands.move_window('k') end},
-            {shift_ctrl.down, function() commands.move_window('j') end},
-            {shift_ctrl.right, function() commands.move_window('l') end},
+            {shift_ctrl.left, function() actions.move_window('h') end},
+            {shift_ctrl.up, function() actions.move_window('k') end},
+            {shift_ctrl.down, function() actions.move_window('j') end},
+            {shift_ctrl.right, function() actions.move_window('l') end},
 
             -- Move focus to next/prev tab
-            {ctrl.page_up, '<C-\\><C-n>:-tabnext<CR>'},
-            {ctrl.page_down, '<C-\\><C-n>:+tabnext<CR>'},
+            {ctrl.page_up, '<C-\\><C-n><Cmd>-tabnext<CR>'},
+            {ctrl.page_down, '<C-\\><C-n><Cmd>+tabnext<CR>'},
             -- Create new tab left/right
-            {alt.page_up, '<C-\\><C-n>:-tab split<CR>'},
-            {alt.page_down, '<C-\\><C-n>:tab split<CR>'},
+            {alt.page_up, '<C-\\><C-n><Cmd>-tab split<CR>'},
+            {alt.page_down, '<C-\\><C-n><Cmd>tab split<CR>'},
             -- Swap tabs left/right
-            {shift_ctrl.page_up, '<C-\\><C-n>:-tabmove<CR>'},
-            {shift_ctrl.page_down, '<C-\\><C-n>:+tabmove<CR>'},
+            {shift_ctrl.page_up, '<C-\\><C-n><Cmd>-tabmove<CR>'},
+            {shift_ctrl.page_down, '<C-\\><C-n><Cmd>+tabmove<CR>'},
         }},
 
         -- Buffers
         {mode='n', {
-            {ctrl.home, ':bp<CR>'},
-            {ctrl.end_, ':bn<CR>'},
+            {ctrl.home, '<Cmd>bp<CR>'},
+            {ctrl.end_, '<Cmd>bn<CR>'},
             {alt.home, '<NOP>'}, -- TODO modified buffer with lower index
-            {alt.end_, ':sbm<CR>'},
+            {alt.end_, '<Cmd>sbm<CR>'},
         }},
 
         -- Open files
         {mode='n', {
-            {k.open, ':enew<CR>'},
+            {k.open, '<Cmd>enew<CR>'},
             -- telescope git_files TODO
             -- telescope live_grep
             -- telescope oldfiles
@@ -136,7 +137,7 @@ function module.get_mappings(keyboard)
         
         -- Exit TODO improve
         {mode='n', {
-            {k.exit, ':bw<CR>'},
+            {k.exit, '<Cmd>bw<CR>'},
         }},
         {mode='citnosx', {
             {shift.exit, '<C-\\><C-n><C-w>q'},
@@ -160,9 +161,9 @@ function module.get_mappings(keyboard)
             {k.linewise..k.scroll, '<C-e>'},
             {k.linewise..shift.scroll, '<C-y>'},
             {ctrl.scroll, 'gg'},
-            {shift_ctrl.scroll, commands.go_to_neg_line},
-            {alt.scroll, commands.fancy_percent},
-            {shift_alt.scroll, function() commands.fancy_percent(true) end},
+            {shift_ctrl.scroll, actions.go_to_neg_line},
+            {alt.scroll, actions.fancy_percent},
+            {shift_alt.scroll, function() actions.fancy_percent(true) end},
         }},
 
         -- word/WORD movement
@@ -179,22 +180,22 @@ function module.get_mappings(keyboard)
 
         -- Character movement
         {mode="nosx", {
-            {k.char, commands.char_t}, -- TODO test
-            {shift.char, commands.char_T},
-            {ctrl.char, commands.char_f},
-            {shift_ctrl.char, commands.char_F},
+            {k.char, actions.char_t}, -- TODO test
+            {shift.char, actions.char_T},
+            {ctrl.char, actions.char_f},
+            {shift_ctrl.char, actions.char_F},
         }},
 
         -- Bigram
         {mode="nosx", {
-            {k.bigram, commands.sneak_forward},
-            {shift.bigram, commands.sneak_backward},
+            {k.bigram, actions.sneak_forward},
+            {shift.bigram, actions.sneak_backward},
         }},
 
         -- Search
         {mode="nosx", {
-            {k.search, commands.search_forward},
-            {shift.search, commands.search_backward},
+            {k.search, actions.search_forward},
+            {shift.search, actions.search_backward},
             {ctrl.search, '<Cmd>noh<CR>', mode='citnosx'},
             {alt.search, telescope.current_buffer_fuzzy_find},
         }},
@@ -212,8 +213,8 @@ function module.get_mappings(keyboard)
 
         -- Seek
         {mode="nosx", {
-            {k.seek, commands.seek.go},
-            {shift.seek, function() commands.seek.go(true) end},
+            {k.seek, actions.seek.go},
+            {shift.seek, function() actions.seek.go(true) end},
         }},
 
         -- Jumps
@@ -256,16 +257,16 @@ function module.get_mappings(keyboard)
             {shift.goto..k.mark, "[`"},
             {k.linewise..shift.goto..k.mark, "['"},
 
-            {k.goto..k.word, commands.goto_word_forward},
-            {shift.goto..k.word, commands.goto_word_backward},
-            {k.goto..ctrl.word, commands.goto_WORD_forward},
-            {shift.goto..ctrl.word, commands.goto_WORD_forward}, -- TODO other shift possibilities
+            {k.goto..k.word, actions.goto_word_forward},
+            {shift.goto..k.word, actions.goto_word_backward},
+            {k.goto..ctrl.word, actions.goto_WORD_forward},
+            {shift.goto..ctrl.word, actions.goto_WORD_forward}, -- TODO other shift possibilities
 
             -- Changelist
             {k.goto..k.undo, "`."},
             {k.linewise..k.goto..k.undo, "'."},
-            {k.goto..k.change, commands.goto_older_change},
-            {shift.goto..k.change, commands.goto_newer_change},
+            {k.goto..k.change, actions.goto_older_change},
+            {shift.goto..k.change, actions.goto_newer_change},
         }},
 
         -- Marks TODO
@@ -373,22 +374,22 @@ function module.get_mappings(keyboard)
             -- {ctrl.paste, do character-wise put at end of line},
             -- {shift_ctrl.paste, do character-wise put at beginning of line (after indent)},
             {k.linewise, {
-                {k.paste, function() commands.put('l', false, 0) end},
-                {shift.paste, function() commands.put('l', true, 0) end },
+                {k.paste, function() actions.put('l', false, 0) end},
+                {shift.paste, function() actions.put('l', true, 0) end },
                 {alt.paste, '<Plug>unimpairedBlankDown'},
                 {shift_alt.paste, '<Plug>unimpairedBlankUp'},
             }},
             {k.charwise, {
-                {k.paste, function() commands.put('c', false, 0) end},
-                {shift.paste, function() commands.put('c', true, 0) end},
+                {k.paste, function() actions.put('c', false, 0) end},
+                {shift.paste, function() actions.put('c', true, 0) end},
             }},
         }},
 
         -- Swap
         --[[
         {mode='n', {
-            {k.swap, commands.swap_char},
-            {shift.swap, function() commands.swap_char(reverse) end},
+            {k.swap, actions.swap_char},
+            {shift.swap, function() actions.swap_char(reverse) end},
             {k.linewise, {
                 {k.swap, '<Plug>(unimpaired-move-down)'},
                 {shift.swap, '<Plug>(unimpaired-move-up)'},
@@ -481,7 +482,7 @@ function module.get_mappings(keyboard)
 
         -- Join
         {mode='nsx', {
-            {k.join, commands.join},
+            {k.join, actions.join},
             {shift.join, 'gq'},
         }},
         {mode='n', {
@@ -504,8 +505,8 @@ function module.get_mappings(keyboard)
             {k.linewise..k.linewise, 'V'},
         }},
         {mode='osx', {
-            {k.charwise, function() commands.do_visual('c') end},
-            {k.linewise, function() commands.do_visual('l') end},
+            {k.charwise, function() actions.do_visual('c') end},
+            {k.linewise, function() actions.do_visual('l') end},
         }},
 
         -- Repeat
