@@ -4,6 +4,7 @@ local config = require("keyfactor.config")
 local utils = require("keyfactor.utils")
 local actions = require("keyfactor.actions")
 local telescope = require("telescope.builtin")
+local comment = require("Comment.api")
 
 local function normal(cmd, keepjumps, remap)
     -- TODO try to preserve count?
@@ -24,7 +25,20 @@ function module.get_mappings()
     local shift_alt = vim.tbl_map(function(x) return utils.mapping_encode(x, {S=true, A=true}) end, config.keys)
     local shift_super = vim.tbl_map(function(x) return utils.mapping_encode(x, {S=true, D=true}) end, config.keys)
 
-    local mappings = {
+    local mappings = {}
+    mappings.internal = {
+        -------------------
+        -- SHIFTED INPUT --
+        -------------------
+        
+        {mode="cit", {
+            {utils.mapping_encode("<Space>", {S=true}), "<Space>"},
+            {utils.mapping_encode("<BS>", {S=true}), "<BS>"},
+            {utils.mapping_encode("<Del>", {S=true}), "<Del>"},
+            {utils.mapping_encode("<Enter>", {S=true}), "<Enter>"},
+            {utils.mapping_encode("<CR>", {S=true}), "<CR>"},
+        }},
+
         ----------------
         -- NAVIGATION --
         ----------------
@@ -129,25 +143,26 @@ function module.get_mappings()
         -- Open files
         {mode='n', {
             {k.open, '<Cmd>enew<CR>'},
-            -- telescope git_files TODO
-            -- telescope live_grep
-            -- telescope oldfiles
-            -- file browser
+            {shift.open, telescope.find_files},
+            {ctrl.open, telescope.git_files},
+            {alt.open, telescope.live_grep},
         }},
         
-        -- Exit TODO improve
-        {mode='n', {
-            {k.exit, '<Cmd>bw<CR>'},
-        }},
+        -- Exit
         {mode='citnosx', {
-            {shift.exit, '<C-\\><C-n><C-w>q'},
-            {ctrl.exit, '<C-\\><C-n>:tabclose<CR>'},
-            -- {alt.nav_exit, TODO :q! but with "are you sure" prompt}
-            -- {super.nav_exit, TODO :qall! but with "are you sure" prompt, and also the option to do
-            -- :cquit instead
+            {k.exit, '<Cmd>q<CR>'},
+            {shift.exit, '<Cmd>tabclose<CR>'},
+            {ctrl.exit, require('bufdelete').bufdelete},
+            -- {alt.exit, TODO force bufdelete, but with "are you sure" prompt if there are unsaved changed}
+            -- {super.exit, TODO :qall! but with "are you sure" prompt, and also the option to do :cquit instead
         }},
 
-        -- Git TODO
+        -- Commit
+        {mode='citnosx', {
+            {k.commit, '<Cmd>w<CR>'},
+            -- TODO {shift.commit, write but specify filename},
+            -- TODO git stuff...
+        }},
 
         -------------
         -- MOTIONS --
@@ -288,6 +303,9 @@ function module.get_mappings()
                 {mode="n", action='viW'},
                 {mode="osx", action='iW'},
             }},
+            {k.scroll, {
+                {mode="nosx", action=actions.text_objects.buffer},
+            }},
             {'"', { -- DANGER mapped to char
                 {mode="n", action='vi"'},
                 {mode="osx", action='i"'},
@@ -385,23 +403,6 @@ function module.get_mappings()
             }},
         }},
 
-        -- Swap
-        --[[
-        {mode='n', {
-            {k.swap, actions.swap_char},
-            {shift.swap, function() actions.swap_char(reverse) end},
-            {k.linewise, {
-                {k.swap, '<Plug>(unimpaired-move-down)'},
-                {shift.swap, '<Plug>(unimpaired-move-up)'},
-            }}
-        }},
-        {mode='sx', {
-            {k.swap, '<Plug>(unimpaired-move-selection-down)'},
-            {shift.swap, '<Plug>(unimpaired-move-selection-up)'},
-            {ctrl.swap, 'gv', mode='sx'}, -- swap with previous visual selection
-        }},
-        ]]
-
         -- Delete
         {mode='n', {
             {k.delete, 'd'},
@@ -460,11 +461,21 @@ function module.get_mappings()
             {k.linewise..alt.indent, '=='},
         }},
 
-        -- Comment TODO
-        --[[ {mode='nsx', {
-            {k.comment, comment},
-            {shift.comment, uncomment},
-        }},]]
+        -- Comment
+        -- TODO check visual mode
+        -- TODO doesn't work as expected, use a different package or write your own
+        {mode='nsx', {
+            {k.comment, actions.comment_as_line},
+            {shift.comment, actions.uncomment_as_line},
+            {ctrl.comment, actions.comment_as_block},
+            {shift_ctrl.comment, actions.uncomment_as_block},
+        }},
+        {mode='n', {
+            {k.linewise..k.comment, actions.comment_as_line_linewise},
+            {k.linewise..shift.comment, actions.uncomment_as_line_linewise},
+            {k.linewise..ctrl.comment, actions.comment_as_block_linewise},
+            {k.linewise..shift_ctrl.comment, actions.uncomment_as_block_linewise},
+        }},
 
         -- Caps
         -- TODO k.charwise
@@ -510,14 +521,20 @@ function module.get_mappings()
         }},
 
         -- Repeat
-        {k.repeat_, '.'},
-        {silent=false, {
-            {ctrl.repeat_, 'q'}, -- TODO use default register;
-            -- but if register set, then use it
-            -- in either case, update default register for @
-            {alt.repeat_, '@'}, -- TODO, except use default register, or ordinary set register
+        -- TODO visual mode?
+        {mode='n', {
+            {k.repeat_, '.'},
+            {silent=false, {
+                {ctrl.repeat_, 'q'}, -- TODO use default register;
+                -- but if register set, then use it
+                -- in either case, update default register for @
+                {alt.repeat_, '@'}, -- TODO, except use default register, or ordinary set register
+            }},
+            -- {shift.repeat_, ':@:<CR>', silent=false}, -- TODO
         }},
-        -- {shift.repeat_, ':@:<CR>', silent=false}, -- TODO
+        {mode='o', {
+            {k.repeat_, actions.text_objects.repeat_},
+        }},
 
         -- Undo
         {mode='n', {
@@ -620,6 +637,76 @@ function module.get_mappings()
         }},
         ]]
     }
+
+    local telescope_actions = require("telescope.actions")
+
+    mappings.telescope = {
+        i = {
+            [k.down] = telescope_actions.move_selection_next,
+            [k.up] = telescope_actions.move_selection_previous,
+
+            [k.exit] = telescope_actions.close,
+
+            [utils.mapping_encode("<CR>")] = telescope_actions.select_default,
+            [alt.up] = telescope_actions.select_horizontal, -- TODO distinguish between up/down
+            [alt.down] = telescope_actions.select_horizontal,
+            [alt.left] = telescope_actions.select_vertical, -- TODO distinguish between left/right
+            [alt.right] = telescope_actions.select_vertical,
+            [alt.page_up] = telescope_actions.select_tab, -- TODO distinguish between before/after
+            [alt.page_down] = telescope_actions.select_tab,
+
+            [shift.page_up] = telescope_actions.preview_scrolling_up,
+            [shift.page_down] = telescope_actions.preview_scrolling_down,
+
+            [k.page_up] = telescope_actions.results_scrolling_up,
+            [k.page_down] = telescope_actions.results_scrolling_down,
+
+            [utils.mapping_encode("<Tab>")] = telescope_actions.toggle_selection + telescope_actions.move_selection_worse,
+            [utils.mapping_encode("<Tab>", {S=true})] = telescope_actions.toggle_selection + telescope_actions.move_selection_better,
+            [shift_ctrl.list] = telescope_actions.send_to_qflist + telescope_actions.open_qflist,
+            [ctrl.list] = telescope_actions.send_selected_to_qflist + telescope_actions.open_qflist,
+            -- ["<C-l>"] = telescope_actions.complete_tag, -- TODO figure out what this does and map if desired
+            [k.select_] = telescope_actions.which_key, -- keys from pressing <C-/>
+            -- ["<C-w>"] = { "<c-s-w>", type = "command" }, -- TODO what does this do?
+        },
+        n = {
+            [utils.mapping_encode("<Esc>")] = telescope_actions.close,
+            [utils.mapping_encode("<CR>")] = telescope_actions.select_default,
+            [alt.up] = telescope_actions.select_horizontal, -- TODO distinguish between up/down
+            [alt.down] = telescope_actions.select_horizontal,
+            [alt.left] = telescope_actions.select_vertical, -- TODO distinguish between left/right
+            [alt.right] = telescope_actions.select_vertical,
+            [alt.page_up] = telescope_actions.select_tab, -- TODO distinguish between before/after
+            [alt.page_down] = telescope_actions.select_tab,
+
+            [utils.mapping_encode("<Tab>")] = telescope_actions.toggle_selection + telescope_actions.move_selection_worse,
+            [utils.mapping_encode("<Tab>", {S=true})] = telescope_actions.toggle_selection + telescope_actions.move_selection_better,
+            [shift.list] = telescope_actions.send_to_qflist + telescope_actions.open_qflist,
+            [shift_ctrl.list] = telescope_actions.send_to_qflist + telescope_actions.open_qflist,
+            [k.list] = telescope_actions.send_selected_to_qflist + telescope_actions.open_qflist,
+            [ctrl.list] = telescope_actions.send_selected_to_qflist + telescope_actions.open_qflist,
+
+            [k.down] = telescope_actions.move_selection_next,
+            [k.up] = telescope_actions.move_selection_previous,
+            [shift.down] = telescope_actions.move_to_bottom,
+            [shift.up] = telescope_actions.move_to_top,
+
+            [k.seek] = telescope_actions.move_selection_next,
+            [shift.seek] = telescope_actions.move_selection_previous,
+
+            [k.scroll] = telescope_actions.preview_scrolling_up,
+            [shift.scroll] = telescope_actions.preview_scrolling_down,
+
+            [shift.page_up] = telescope_actions.preview_scrolling_up,
+            [shift.page_down] = telescope_actions.preview_scrolling_down,
+
+            [k.page_up] = telescope_actions.results_scrolling_up,
+            [k.page_down] = telescope_actions.results_scrolling_down,
+
+            [k.select_] = telescope_actions.which_key,
+        },
+    }
+
     return mappings
 end
 

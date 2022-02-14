@@ -188,8 +188,10 @@ function module.apply(map_table)
 end
 
 function module.initialize()
-    local map_table = require("keyfactor.mappings").get_mappings()
-    module.apply(map_table)
+    local mappings = require("keyfactor.mappings").get_mappings()
+    module.apply(mappings.internal)
+
+    require("telescope.mappings").default_mappings = mappings.telescope
 end
 
 function module.setup(options)

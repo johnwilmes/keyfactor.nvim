@@ -29,7 +29,7 @@ endfunction
 nnoremap <Plug>KeyfactorRepeat :<C-U>call KeyfactorDoCallback("repeat")<CR>
 ]])
 
---[[Produce a vim text operator from the Lua function `text_operator`. The Lua function should expect a
+--[[Produce a vim text operator from the Lua function `opfunc`. The Lua function should expect a
 single string argument which is either 'line', 'char', or 'block', describing what kind of motion
 followed the operator. Use the [ and ] marks to find the start and end of the selected text.
 ]]
@@ -38,6 +38,14 @@ function actions.operator(opfunc)
         vim.fn.KeyfactorSetCallback("operator", opfunc)
         vim.opt.operatorfunc = "KeyfactorOperator"
         vim.api.nvim_feedkeys('g@', 'ni', false)
+    end
+end
+
+function actions.operate_on_line(opfunc)
+    local operator = actions.operator(opfunc)
+    return function()
+        vim.api.nvim_feedkeys('_', 'ni', false)
+        operator()
     end
 end
 
@@ -340,7 +348,7 @@ function actions.do_visual(mode)
         mode = CTRL_V
     end
 
-    current_mode, _ = vim.api.nvim_get_mode()
+    current_mode = vim.api.nvim_get_mode().mode
     if (current_mode:sub(1,1) == 'n') or
        (current_mode:sub(1,1) == 'v' and mode ~= 'v') or
        (current_mode:sub(1,1) == 'V' and mode ~= 'V') or
@@ -359,140 +367,35 @@ function actions.move_window(direction)
     end
 end
 
--- TODO actions.shift_selection ??? (swap char for visual mode. probably would never be used)
-
---[[
-This swap operator is overly complicated and doesn't work all that well, but it was a cute idea.
-
--- TODO: skip ahead using count
--- TODO: make indenting work?
--- TODO: preserve extmarks?
-actions.swap = function(reverse)
-    -- The operator needs to repeat itself, and uses this flag to keep track of whether it is
-    -- already active
-    local operator_active = false
-    local count = 0
-    local cursor = {} -- initial cursor position
-    local source_start = {} -- position of the start of the first text block
-    local source_end = {} -- position of the end of the first text block
-
-    local fail = function(message)
-        vim.api.nvim_win_set_cursor(0, cursor)
-        vim.api.nvim_echo({{"Swap failed: "..message}}, true, {})
-    end
-
-    local operator = actions.operator(function(motion_type)
-
-        if motion_type == "block" then
-            return fail("Blockwise motions not supported")
-        end
-
-        if not operator_active then
-            -- This is the first pass through, we are getting the source block
-            operator_active = true
-            -- Get the bounds of the source block
-            source_start = vim.api.nvim_buf_get_mark(0, "[")
-            source_end = vim.api.nvim_buf_get_mark(0, "]")
-            -- To infer the target block, move past the end of the source block and repeat the
-            -- operator
-            local next_start = {}
-            if motion_type == "line" then
-                if reverse then
-                    if source_start[1] == 1 then
-                        fail("Invalid swap pair (no line for target)")
-                    else
-                        next_start = {source_start[1]-1, 0}
-                    end
-                else
-                    if source_end[1] == vim.api.nvim_buf_line_count(0) then
-                        fail("Invalid swap pair (no line for target)")
-                    else
-                        next_start = {source_end[1]+1, 0}
-                    end
-                end
-            else -- motion_type == "char"
-                if reverse then
-                    next_start = source_start
-                else
-                    next_start = source_end
-                end
-                next_start = utils.get_next_position(0, next_start, reverse)
-            end
-            vim.api.nvim_win_set_cursor(0, next_start)
-
-            vim.api.nvim_feedkeys(".", "ni", false) -- repeat operator
-        else
-            -- This is the second pass through, we are getting the target block and doing the swap
-            operator_active = false
-            target_start = vim.api.nvim_buf_get_mark(0, "[")
-            target_end = vim.api.nvim_buf_get_mark(0, "]")
-
-            --vim.api.nvim_echo({{vim.inspect(source_start)..vim.inspect(target_start)}}, true, {})
-            
-            -- For simplicity, we arrange that source comes before target in buffer
-            if reverse then
-                target_start, source_start = source_start, target_start
-                target_end, source_end = source_end, target_end
-            end
-
-            if (not utils.buffer_less(source_start, target_start)) or
-               (not utils.buffer_less(source_end, target_end)) then
-                return fail("Invalid swap pair (source doesn't precede target)")
-            end
-
-            if not utils.buffer_less(source_end, target_start) then
-                -- Overlapping source and target:
-                -- Leave the overlap in place and swap outside of the overlapping portion
-                local tmp = utils.get_next_position(0, source_end)
-                source_end = utils.get_next_position(0, target_start, true)
-                target_start = tmp
-            end
-
-            local target_lines = vim.api.nvim_buf_get_lines(0, target_start[1]-1, target_end[1], true)
-            local source_lines = vim.api.nvim_buf_get_lines(0, source_start[1]-1, source_end[1], true)
-
-            -- Set cursor before swapping the text, because swapping might change positioning
-            if reverse then
-                vim.api.nvim_win_set_cursor(0, source_start)
-            else
-                vim.api.nvim_win_set_cursor(0, target_start)
-            end
-
-            if motion_type == "line" then
-                vim.api.nvim_buf_set_lines(0, source_start[1]-1, source_end[1], true, target_lines)
-                vim.api.nvim_buf_set_lines(0, target_start[1]-1, target_end[1], true, source_lines)
-                vim.cmd([[normal! ] ].."^") -- fix cursor column
-            else -- motion_type == "char"
-                local lens, lent = #source_lines, #target_lines
-
-                if lens == 1 then
-                    source_lines[1] = string.sub(source_lines[1], source_start[2]+1, source_end[2]+1)
-                else
-                    source_lines[1] = string.sub(source_lines[1], source_start[2]+1)
-                    source_lines[lens] = string.sub(source_lines[lent], 1, source_end[2]+1)
-                end
-
-                if lent == 1 then
-                    target_lines[1] = string.sub(target_lines[1], target_start[2]+1, target_end[2]+1)
-                else
-                    target_lines[1] = string.sub(target_lines[1], target_start[2]+1)
-                    target_lines[lent] = string.sub(target_lines[lent], 1, target_end[2]+1)
-                end
-
-                vim.api.nvim_buf_set_text(0, target_start[1]-1, target_start[2], 
-                                             target_end[1]-1, target_end[2]+1, source_lines)
-                vim.api.nvim_buf_set_text(0, source_start[1]-1, source_start[2],
-                                             source_end[1]-1, source_end[2]+1, target_lines)
-            end
-        end
-    end)
-
+local function text_object(selector)
     return function()
-        count = vim.v.count
-        cursor = vim.api.nvim_win_get_cursor(0)
-        operator()
+        local mode, start_pos, end_pos = selector()
+        actions.do_visual(mode)
+        local line, col = unpack(start_pos)
+        vim.api.nvim_buf_set_mark(0, '<', line, col, {})
+        local line, col = unpack(end_pos)
+        vim.api.nvim_buf_set_mark(0, '>', line, col, {})
     end
 end
-]]
+
+actions.text_objects = {
+    repeat_ = text_object(function()
+        return 'v', vim.api.nvim_buf_get_mark(0, '['), vim.api.nvim_buf_get_mark(0, ']')
+    end),
+
+    buffer = text_object(function()
+        return 'V', {1,0}, {vim.api.nvim_buf_line_count(0), 0}
+    end),
+}
+
+local comment = require("Comment.api")
+actions.comment_as_line = actions.operator(comment.comment_linewise_op)
+actions.comment_as_block = actions.operator(comment.comment_current_blockwise_op)
+actions.comment_as_line_linewise = actions.operate_on_line(comment.comment_linewise_op)
+actions.comment_as_block_linewise = actions.operate_on_line(comment.comment_current_blockwise_op)
+actions.uncomment_as_line = actions.operator(comment.uncomment_linewise_op)
+actions.uncomment_as_block = actions.operator(comment.uncomment_current_blockwise_op)
+actions.uncomment_as_line_linewise = actions.operate_on_line(comment.uncomment_linewise_op)
+actions.uncomment_as_block_linewise = actions.operate_on_line(comment.uncomment_current_blockwise_op)
 
 return actions
