@@ -91,7 +91,7 @@ function utils.get_next_position(window, position, reverse)
     return result
 end
 
-function utils.buffer_less(tuple1, tuple2)
+function utils.position_less(tuple1, tuple2)
     -- true iff tuple1 comes strictly before tuple2 in the buffer
     if tuple1[1] < tuple2[1] then
         return true
@@ -100,6 +100,16 @@ function utils.buffer_less(tuple1, tuple2)
     else
         return false
     end
+end
+
+function utils.position_less_equal(tuple1, tuple2)
+    -- true iff tuple1 equals tuple2 or comes before it in the buffer
+    return utils.position_less(tuple1, tuple2) or vim.deep_equal(tuple1, tuple2)
+end
+
+function utils.range_contains(range1, range2)
+    -- true iff range1 contains range2
+    return utils.position_less_equal(range1[1], range2[1]) and utils.position_less_equal(range2[2], range1[2])
 end
 
 function utils.mapping_encode(key, modifiers)
@@ -125,6 +135,28 @@ function utils.mapping_encode(key, modifiers)
         key = ("<%s-%s"):format(mod, key:sub(2))
     end
     return key
+end
+
+function utils.mode_in(modes)
+    -- valid chars for modes: citnosx
+    current = vim.api.nvim_get_mode()["mode"]
+    if current:sub(1,2) == 'no' then
+        current = 'o'
+    elseif (current:sub(1,1) == 'v' or
+            current:sub(1,1) == 'V' or
+            current:sub(1,1) == CTRL_V) then
+        current = 'x'
+    elseif (current:sub(1,1) == 's' or
+            current:sub(1,1) == 'S' or
+            current:sub(1,1) == CTRL_S) then
+        current = 's'
+    else
+        current = current:sub(1,1)
+    end
+    if modes:find(current) then
+        return true
+    end
+    return false
 end
 
 return utils
