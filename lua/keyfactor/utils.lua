@@ -1,5 +1,8 @@
 local utils = {}
 
+local CTRL_V = "\22"
+local CTRL_S = "\19"
+
 function utils.is_callable(object)
     if type(object) == "function" then
         return true
@@ -157,6 +160,83 @@ function utils.mode_in(modes)
         return true
     end
     return false
+end
+
+local motion_types = {
+    char = {visual_mode='v', select_mode='s'},
+    line = {visual_mode='V', select_mode='S'},
+    block = {visual_mode=CTRL_V, select_mode=CTRL_S},
+}
+for name, obj in pairs(motion_types) do
+    obj.name = name
+end
+
+local function motion_type_from_string(s)
+    for name, obj in pairs(motion_types) do
+        if s == name or s == name:sub(1,1) or s == obj.visual_mode or s == obj.select_mode then
+            return obj
+        end
+    end
+    error("Unrecognized motion type")
+end
+
+local function motion_type_from_mode()
+    local mode = vim.api.nvim_get_mode()["mode"]
+    if mode:sub(1,2) == 'no' then
+        return module.motion_type.from_string(mode:sub(3,3))
+    else
+        return module.motion_type.from_string(mode:sub(1,1))
+    end
+end
+
+function utils.get_motion_type(s)
+    if s then
+        return motion_type_from_string(s)
+    else
+        return motion_type_from_mode()
+    end
+end
+
+function utils.exit_visual()
+    if utils.mode_in('x') then
+        vim.cmd('normal! '..utils.get_motion_type().visual_mode)
+    end
+end
+
+function utils.operate(operator, left, right, motion_type, count, register, remap)
+    local visual_start = vim.api.nvim_buf_get_mark(0, '<')
+    local visual_end = vim.api.nvim_buf_get_mark(0, '>')
+
+    vim.api.nvim_buf_set_mark(0, '[', left[1], left[2], {})
+    vim.api.nvim_buf_set_mark(0, ']', right[1], right[2], {})
+    if remap or (operator:lower():sub(1, #'<plug>') == '<plug>') then
+        remap = ''
+    else
+        remap = '!'
+    end
+    if motion_type.name == 'block' then
+        motion_type = '<C-v>'
+    else
+        motion_type = motion_type.visual_mode
+    end
+    if count then
+        count = tostring(count)
+    else
+        count = ''
+    end
+    if register then
+        register = '"'..register
+    else
+        register = ''
+    end
+
+    local cmd = [[normal%s %s<Cmd>normal! %s`[o`]%s%s<CR>]]
+    cmd = cmd:format(remap, operator, motion_type, count, register)
+    cmd = vim.api.nvim_replace_termcodes(cmd, true, true, true)
+    vim.cmd(cmd)
+
+    vim.api.nvim_buf_set_mark(0, '<', visual_start[1], visual_start[2], {})
+    vim.api.nvim_buf_set_mark(0, '>', visual_end[1], visual_end[2], {})
 end
 
 return utils

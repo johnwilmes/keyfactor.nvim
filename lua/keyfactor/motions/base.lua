@@ -2,18 +2,13 @@
 -- Handle folds properly?
 --]]
 
-local module = {}
 local utils = require("keyfactor.utils")
-local state = require("keyfactor.state")
+local kf = require("keyfactor.base")
 
-module.motion = {}
-function module.motion:new(obj)
-    obj = obj or {defaults = {seek = true, jump = true}}
-    setmetatable(obj, self)
-    self.__index = self
-    self.__call = self.__call -- HACK: make metatable work for "subclasses"
-    return obj
-end
+local module = {}
+
+
+module.motion = kf.action:new({motion_type = motion_types.char, defaults = {seek = true, jump = true}})
 
 --[[
 -- Motion parameters:
@@ -27,36 +22,40 @@ end
 --      wrap
 --]]
 
-function module.motion:__call(params)
-    params = vim.tbl_extend("keep", params, self.defaults)
+function module.motion:_exec(params)
     --
     -- TODO when mode=xo, handle exclusive/inclusive motions properly?
     --
     -- but probably not the way vim does it
 
     if utils.mode_in('ox') then
-        if (not params.textobject) or utils.mode_in('x') then
-            params.wrap = false
+        if (not self.params.textobject) or utils.mode_in('x') then
+            self.params.wrap = false
         end
         local left, right = self:range(params)
         if not left then
             return
         end
         if utils.mode_in('o') then
-            -- TODO save < and > marks
-            vim.api.nvim_buf_set_mark(params.buffer, '[', left[1], left[2], {})
-            vim.api.nvim_buf_set_mark(params.buffer, ']', right[1], right[2], {})
-            local motion_type = self:get_motion_type(params)
-            vim.cmd('normal! '..motion_type..'`[o`]')
-            -- TODO hopefully at this point the < and > marks can be restored? or maybe we need to
-            -- wait until the opfunc wrapper is called
+            require('keyfactor.operator')._register_motion(self, params)
+            vim.api.nvim_buf_set_mark(0, '[', left[1], left[2], {})
+            vim.api.nvim_buf_set_mark(0, ']', right[1], right[2], {})
+            local visual_mode
+            local mode = vim.api.nvim_get_mode()["mode"]
+            if #mode == 3 then
+                visual_mode = mode:sub(3,3)
+            else
+                visual_mode = self.motion_type.visual_mode
+            end
+            vim.cmd('normal! '..visual_mode..'`[o`]') -- TODO works for ctrl-v?
         else -- mode is 'x'
             -- TODO does this work properly if visual mode is linewise?
-            local visual_start = vim.api.nvim_buf_get_mark(params.buffer, '<')
-            local visual_end = vim.api.nvim_buf_get_mark(params.buffer, '>')
+            -- TODO this definitely doesn't work properly if visual mode is blockwise
+            local visual_start = vim.api.nvim_buf_get_mark(0, '<')
+            local visual_end = vim.api.nvim_buf_get_mark(0, '>')
             local start_contract = (not params.reverse) and vim.deep_equal(visual_start, params.cursor)
             local end_contract = params.reverse and vim.deep_equal(visual_end, params.cursor)
-            local expand = not (start_contract or end_contract)
+            local expand = (not (start_contract or end_contract)) or vim.deep_equal(visual_start, visual_end)
 
             if params.textobject and (params.count == 0) then
                 -- iteratively increase count until motion has an effect
@@ -74,25 +73,28 @@ function module.motion:__call(params)
 
             if expand then
                 if utils.position_less(left, visual_start) then
-                    visual_start = left
+                    if not vim.deep_equal(visual_start, params.cursor) then
+                        vim.cmd("normal! o")
+                    end
+                    vim.api.nvim_win_set_cursor(0, left)
+                    if not params.reverse then
+                        vim.cmd("normal! o")
+                    end
                 end
                 if utils.position_less(visual_end, right) then
-                    visual_end = right
+                    if not vim.deep_equal(visual_end, params.cursor) then
+                        vim.cmd("normal! o")
+                    end
+                    vim.api.nvim_win_set_cursor(0, right)
+                    if params.reverse then
+                        vim.cmd("normal! o")
+                    end
                 end
             elseif start_contract then
-                visual_start = right
-                if utils.position_less(visual_end, visual_start) then
-                    visual_end, visual_start = visual_start, visual_end
-                end
+                vim.api.nvim_win_set_cursor(0, right)
             else -- end_contract
-                visual_end = left
-                if utils.position_less(visual_end, visual_start) then
-                    visual_end, visual_start = visual_start, visual_end
-                end
+                vim.api.nvim_win_set_cursor(0, left)
             end
-
-            vim.api.nvim_buf_set_mark(params.buffer, '<', visual_start[1], visual_start[2], {})
-            vim.api.nvim_buf_set_mark(params.buffer, '>', visual_end[1], visual_end[2], {})
         end
     else -- just a motion, not a selection
         params.textobject = false
@@ -104,16 +106,14 @@ function module.motion:__call(params)
             pos = reverse_pos
         end
         if params.jump then
-            state:add_jump(pos)
+            kf.state:add_jump(pos)
         end
         vim.api.nvim_win_set_cursor(0, pos)
     end
 
     if params.seek then
-        state:set_seek(self, params)
+        kf.state:set_seek(self, params)
     end
-
-    state:set_motion(self)
 end
 
 function module.motion:range(params)
@@ -125,7 +125,7 @@ function module.motion:range(params)
         Otherwise, one of the endpoints is equal to params.cursor (the left one iff params.reverse
         is false)
     ]]
-    error("Not implemented")
+    return self:_range(self:_get_params(params))
 end
 
 --[[
@@ -251,7 +251,7 @@ local function tm_unique(params, objects)
     return unique
 end
 
-function module.tranched_motion:range(params)
+function module.tranched_motion:_range(params)
     local count = 0 -- number of matches passed so far in the correct direction
     -- follows iff subsequent tranches contain only candidates following cursor
     local follows = false
@@ -286,12 +286,12 @@ function module.tranched_motion:range(params)
     end
 end
 
-function module.tranched_motion:tranches(params)
+function module.tranched_motion:_tranches(params)
     error("Not implemented")
 end
 
 module.definite_motion = module.tranched_motion:new({defaults={seek=false, jump=true}})
-function module.definite_motion:tranches(params)
+function module.definite_motion:_tranches(params)
     local values = self:get_all(params)
     local done = false
     return function()
@@ -305,8 +305,8 @@ end
 
 module.inline_motion = module.tranched_motion:new({defaults={seek=false, jump=false}})
 
-function module.inline_motion:tranches(params)
-    local last_row = (params.reverse and 1) or vim.api.nvim_buf_line_count(params.buffer)
+function module.inline_motion:_tranches(params)
+    local last_row = (params.reverse and 1) or vim.api.nvim_buf_line_count(0)
     local inc = (params.reverse and -1) or 1
     local index = params.cursor[1]-inc
     local finished = false
@@ -319,7 +319,7 @@ function module.inline_motion:tranches(params)
         index = index+inc
         if index == last_row + inc then
             if params.wrap then
-                index = (params.reverse and vim.api.nvim_buf_line_count(params.buffer)) or 1
+                index = (params.reverse and vim.api.nvim_buf_line_count(0)) or 1
                 last_row = params.cursor[1]-inc
                 if index == last_row+inc then
                     finished = true
@@ -334,7 +334,7 @@ function module.inline_motion:tranches(params)
     end
 end
 
-function module.inline_motion:get_all_in_line(params, line)
+function module.inline_motion:_get_all_in_line(params, line)
     error("Not implemented")
 end
 
