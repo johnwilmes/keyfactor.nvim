@@ -7,8 +7,54 @@ local kf = require("keyfactor.base")
 
 local module = {}
 
+module.textobject = {}
 
-module.motion = kf.action:new({motion_type = motion_types.char, defaults = {seek = true, jump = true}})
+function module.textobject:new(obj)
+    obj = obj or {}
+    setmetatable(obj, self)
+    self.__index = self
+    return obj
+end
+
+function module.textobject:get_next(params)
+    --[[
+        Params:
+            reverse
+            outer
+            containing
+            cursor
+
+        Returns next object. If containing is false, this is the first object whose inner (or
+        outer, if outer is true) portion is completely beyond cursor (in the forward direction,
+        unless reverse is true).  If containing is true, this is the first object containing the
+        cursor, ordered by inner/outer endpoint proximity to cursor in the appropriate direction
+
+        Returns nil if no such object. When there are multiple possible next objects, returns all
+        of them sorted by increasing size
+
+    --]]
+    error("Not implemented")
+end
+
+function module.textobject:iter(params)
+    --[[
+        Params:
+            reverse
+            outer
+            left
+            right
+
+        iterates over all objects contained in the region [left, right]
+        sorted first by increasing left side, then by increasing right side (unless reverse, in
+        which case sorted by decreasing right side, then by decreasing left side)
+
+        we give implementation based on get_next, but it is reasonable to override this with a more
+        efficient implementation where possible
+    --]]
+    error("Not implemented")
+end
+
+
 
 --[[
 -- Motion parameters:
@@ -17,9 +63,7 @@ module.motion = kf.action:new({motion_type = motion_types.char, defaults = {seek
 --      near - if textobject and mode=ox, does not skip objects containing cursor. (not near skips
 --             such objects). if not textobject, moves to boundary of current object (if not
 --             already there) rather than boundary of next object. (so near is like e/b and not
---             near is like w/ge)
---      textobject - for mode=ox, behave as text object rather than motion
---      wrap
+--             near is like w/ge) textobject - for mode=ox, behave as text object rather than motion wrap
 --]]
 
 function module.motion:_exec(params)

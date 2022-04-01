@@ -14,6 +14,22 @@ end
 
 
 --[[
+
+mod group {
+    defaults = {....}
+    shift -> reverse
+    ctrl -> exterior
+    alt -> outer
+    (one-shot) leader(k.choose) -> {defaults = {choose}, shift -> reverse, ctrl-> exterior, ...}
+    (one-shot) leader(ctrl(k.choose)) -> multiple
+} motion mod group
+
+bind ( k.visual, action= toggle `replace` in (motion mod group).defaults)
+
+bind (alt(k.visual), action= action
+
+
+
 bind(
 {
     {trigger = {key='a'}, action=motions.word_part, params = {reverse = false, near = false, textobject = false, outer = false}}
@@ -23,3 +39,31 @@ bind(
     {trigger = {mode='x'}, params = {near = true, textobject = true}},
     {trigger = {mode='x', ctrl = true}, params = {near = false, textobject = true}},
 }
+
+shift
+
+
+{
+    shift -> reverse=true
+    ctrl -> exterior=true
+    alt -> inner=true
+
+    choose key -> set selector... as one-shot
+
+
+
+    select key -> set replace=true
+    shift(select key) -> set augment=true
+
+    ctrl(select key) -> set all=true as one-shot
+
+    alt(select key) -> rotate selection
+
+
+    collapse selection...?
+}
+
+
+
+
+]]
