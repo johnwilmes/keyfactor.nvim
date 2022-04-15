@@ -3,6 +3,8 @@ local kf = require("keyfactor.base")
 
 local module = {}
 
+module.target = {exterior = {}, interior = {}, inner = {}, outer = {}, both = {}, focus = {}}
+
 module.range = {default_focus = 3}
 
 local range_mt = {__index = module.range}
@@ -44,7 +46,7 @@ function module.range:augment(delta, params)
 
     delta = delta:reduce(params.boundary)
 
-    if params.target == "exterior" then
+    if params.target == module.target.exterior then
         delta = {delta[4], delta[3], delta[2], delta[1]}
     end
 

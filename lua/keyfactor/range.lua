@@ -35,18 +35,27 @@ function module.range:default_boundary()
     end
 end
 
-function module.range:reduce(boundary)
-    if boundary == module.boundary.all then
-        return self
-    elseif boundary == module.boundary.focus then
-        return self:new{self:get_focus(), focus_index=self.focus_index}
+function module.range:reduce(boundary, linewise)
+    return self:new{focus_index=self.focus_index, self:get_bounds(boundary, linewise)}
+end
+
+function module.range:get_bounds(boundary, linewise)
+    local result
+    if boundary == module.boundary.focus then
+        local f = self:get_focus()
+        result = {f, f}
     elseif boundary == module.boundary.outer then
-        return self:new{self[1], self[4], focus_index=self.focus_index}
+        result = {self[1], self[4]}
     elseif boundary == module.boundary.inner then
-        return self:new{self[2], self[3], focus_index=self.focus_index}
+        result = {self[2], self[3]}
     else
-        return self:reduce(self:default_boundary())
+        return self:get_targets(self:default_boundary(), linewise)
     end
+    if linewise then
+        result[1] = {result[1][1], 0}
+        result[2] = {result[2][1], 0}
+    end
+    return result
 end
 
 --[[
@@ -87,18 +96,69 @@ function module.range:augment(delta, params)
     return self:new(result)
 end
 
-function module.extmark_range = {}
-local extmark_range_mt = {__index = module.extmark_range}
+module.multirange = {}
+local multirange_mt = {__index = module.multirange}
 
-function module.extmark_range:new(buffer, namespace, range, style)
+function module.multirange:new(obj)
+    obj = obj or {}
+    setmetatable(obj, multirange_mt)
+    return obj
+end
+
+function module.multirange:merge(boundary, linewise)
+    if #self == 0 then
+        return self
+    end
+
+    local head = self[1]
+    local sorted = vim.deepcopy(self) -- directly edit elements below
+    utils.sort_ranges(sorted, {boundary=boundary, linewise=linewsie})
+
+    local result = {}
+    local current = sorted[1]
+    local _, right = current:get_bounds(boundary, linewise)
+    if (boundary == module.boundary.focus) or linewise then
+        right = {right[1], right[2]+1}
+    end
+    for _, range in ipairs(rounded) do
+        local left, _ = range:get_bounds(boundary, linewise)
+        if utils.position_less(new_left, right) then
+            -- deep copied above so safe to edit current directly
+            if utils.position_less(current[3], range[3]) then
+                current[3] = range[3]
+            end
+            if utils.position_less(current[4], range[4]) then
+                current[4] = range[4]
+            end
+        else
+            table.insert(result, current)
+            current = range
+            _, right = current:get_bounds(boundary, linewise)
+            if (boundary == module.boundary.focus) or linewise then
+                right = {right[1], right[2]+1}
+            end
+        end
+    end
+
+    return self:new(result)
+end
+
+
+--[[
+    TODO this should actually be per WINDOW+buffer
+--]]
+module.extrange = {}
+local extrange_mt = {__index = module.extrange}
+
+function module.extrange:new(buffer, namespace, range, style)
     style = style or {}
     local obj = {buffer = buffer, namespace = namespace, style=style}
-    setmetatable(obj, extmark_range_mt)
+    setmetatable(obj, extrange_mt)
     obj:update(range)
     return obj
 end
 
-function module.extmark_range:as_range()
+function module.extrange:as_range()
     if self.deleted then
         return nil
     end
@@ -112,7 +172,7 @@ function module.extmark_range:as_range()
         {outer_details.end_row, outer_details.end_col}})
 end
 
-function module.extmark_range:update(range, style)
+function module.extrange:update(range, style)
     style = style or self.style
     self.outer = vim.api.nvim_buf_set_extmark(self.buffer, self.namespace,
         range[1][1], range[1][2],
@@ -126,7 +186,7 @@ function module.extmark_range:update(range, style)
         {id=self.focus})
 end
 
-function module.extmark_range:delete()
+function module.extrange:delete()
     if not self.deleted then
         vim.api.nvim_buf_del_extmark(self.buffer, self.namespace, self.inner)
         vim.api.nvim_buf_del_extmark(self.buffer, self.namespace, self.outer)
@@ -135,9 +195,7 @@ function module.extmark_range:delete()
     end
 end
 
-
-module.selection = {focus = 3,
-                    style = {
+module.selection = {style = {
                         inner = {hl_group='KeyfactorSelectionInner', priority=1010},
                         outer = {hl_group='KeyfactorSelectionOuter', priority=1000},
                         focus = {priority=1020},
@@ -184,8 +242,8 @@ function module.selection:rotate(reverse)
             new = self.head.next_
         end
         if new ~= self.head then
-            new.extmark_range:update(new.extmark_range:as_range(), self.active_style)
-            self.head.extmark_range:update(self.head.extmark_range:as_range(), self.style)
+            new.extrange:update(new.extrange:as_range(), self.active_style)
+            self.head.extrange:update(self.head.extrange:as_range(), self.style)
             self.head = new
         end
     end
@@ -196,22 +254,30 @@ function module.selection:update(range)
     if not self.head then
         error("Empty selection")
     else
-        self.head.extmark_range:update(range, self.active_style)
+        self.head.extrange:update(range, self.active_style)
     end
 end
 
-function module.selection:iter(params)
+function module.selection:iter()
     --[[ primary interface for ops? first design ops ]]
+end
+
+function module.selection:as_multirange()
+    local multirange = {}
+    for extrange in self:iter() do
+        table.insert(multirange, extrange:as_range())
+    end
+    return module.multirange:new(multirange)
 end
 
 
 function module.selection:add(range, before)
     if not self.head then
-        self.head = {extmark_range=module.extmark_range:new(self.buffer, self.namespace, range, self.active_style)}
+        self.head = {extrange=module.extrange:new(self.buffer, self.namespace, range, self.active_style)}
         self.head.next_ = self.head
         self.head.prev = self.head
     else
-        local new = {extmark_range=module.extmark_range:new(self.buffer, self.namespace, range, self.style)}
+        local new = {extrange=module.extrange:new(self.buffer, self.namespace, range, self.style)}
         if before then
             new.prev = self.head.prev
             new.prev.next_ = new
@@ -231,7 +297,7 @@ function module.selection:remove(reverse)
     if not self.head then
         error("Empty selection")
     elseif self.n == 1 then
-        self.head.extmark_range:delete()
+        self.head.extrange:delete()
         self.head = nil
         self.n = 0
     else
@@ -244,7 +310,7 @@ function module.selection:remove(reverse)
             self.head.prev = removed.prev
             self.head.prev.next_ = self.head
         end
-        removed.extmark_range:delete()
+        removed.extrange:delete()
         self.n = self.n - 1
     end
 end

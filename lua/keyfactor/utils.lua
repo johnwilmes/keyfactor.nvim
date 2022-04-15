@@ -110,6 +110,23 @@ function utils.position_less_equal(tuple1, tuple2)
     return utils.position_less(tuple1, tuple2) or vim.deep_equal(tuple1, tuple2)
 end
 
+local function buffer_order(params)
+    params = params or {}
+    return function (a,b)
+        a1, a2 = a:get_bounds(params.boundary, params.linewise)
+        b1, b2 = b:get_bounds(params.boundary, params.linewise)
+        if params.reverse then
+            a1, a2, b1, b2 = b2, b1, a2, a1
+        end
+        return (utils.position_less(a1, b1) or
+                (vim.deep_equal(a1, b1) and utils.position_less(a2, b2)))
+    end
+end
+
+function utils.sort_ranges(ranges, params)
+    table.sort(ranges, buffer_order(params))
+end
+
 function utils.range_contains(range1, range2)
     -- true iff range1 contains range2
     return utils.position_less_equal(range1[1], range2[1]) and utils.position_less_equal(range2[2], range1[2])
