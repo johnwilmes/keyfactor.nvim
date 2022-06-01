@@ -1,3 +1,5 @@
+local module = {}
+
 local function wrap(action, params)
     params = vim.deepcopy(params or {})
     params.count = params.count or vim.v.count
@@ -12,8 +14,55 @@ local function wrap(action, params)
 end
 
 
-
 --[[
+
+
+map(trigger, result, mods) 
+
+
+Things we might want to do that are currently inconvenient:
+    - extend or modify a table parameter, rather than replacing it
+        (e.g., list of layers to enable...?)
+
+    - wrap an action, or perform an action before/after, rather than replacing it
+
+
+
+
+
+
+mods table:
+    [nil] is always selected
+    oneshots can be pressed in any order
+
+selection_mods = {
+    ([1]=) {mods={},
+            action=require("keyfactor.actions.selection").select_next,
+            defaults={inner=true, stretch=true},
+            --params={}
+            },
+    ([2]=) {mods={shift=true}, -- alias shift={shift=true} so you can do trigger=shift
+            defaults={reverse=true}},
+           {mods={control=true},
+            defaults={augment=true}},
+           {mods={alt=true},
+            defaults={exterior=true}},
+           {mods={[oneshot(k.choose)]
+    shift={defaults={reverse=true}},
+    control={defaults={augment=true}},
+    alt={defaults={exterior=true}},
+    [oneshot(k.choose)] = {action=require("keyfactor.actions.choose_selection").auto_choose},
+}
+
+bind(k.word, 
+
+
+
+
+
+
+
+
 
 mod group {
     defaults = {....}

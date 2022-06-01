@@ -3,6 +3,14 @@ local utils = {}
 local CTRL_V = "\22"
 local CTRL_S = "\19"
 
+function utils.enum(list)
+    local enum = {}
+    for i, name in ipairs(list) do
+        enum[name] = i
+    end
+    return enum
+end
+
 function utils.is_callable(object)
     if type(object) == "function" then
         return true
@@ -14,11 +22,15 @@ end
 
 utils.string = {}
 function utils.string.lstrip(s)
-    return s:match("^%s*(.*)")
+    return s:match("^%s*(.-)$")
 end
 
-function utils.string.lstrip(s)
-    return s:match("(.-)%s*$")
+function utils.string.rstrip(s)
+    return s:match("^(.-)%s*$")
+end
+
+function utils.string.strip(s)
+    return s:match("^%s*(.-)%s*$")
 end
 
 function utils.string.split_keycodes(s)
@@ -110,21 +122,12 @@ function utils.position_less_equal(tuple1, tuple2)
     return utils.position_less(tuple1, tuple2) or vim.deep_equal(tuple1, tuple2)
 end
 
-local function buffer_order(params)
-    params = params or {}
-    return function (a,b)
-        a1, a2 = a:get_bounds(params.boundary, params.linewise)
-        b1, b2 = b:get_bounds(params.boundary, params.linewise)
-        if params.reverse then
-            a1, a2, b1, b2 = b2, b1, a2, a1
-        end
-        return (utils.position_less(a1, b1) or
-                (vim.deep_equal(a1, b1) and utils.position_less(a2, b2)))
+function utils.round_to_line(...)
+    local result = {...}
+    for i=1,#result do
+        result[i] = {result[i][1], 0}
     end
-end
-
-function utils.sort_ranges(ranges, params)
-    table.sort(ranges, buffer_order(params))
+    return unpack(result)
 end
 
 function utils.range_contains(range1, range2)
