@@ -4,19 +4,13 @@ local kf = require("keyfactor.base")
 
 local module = {}
 
-module.boundary = utils.enum({"inner", "outer", "focus", "all"})
-local B = module.boundary
-
-
-module.range = {focus = {inner = false, side = 2},
-                textobject = {}}
+module.range = {textobject = {}}
 local range_mt = {__index = module.range}
 
 function module.range:new(params)
     params = params or {}
     local textobject = params.textobject or self.textobject
-    local range = {focus = vim.deepcopy(params.focus or self.focus),
-                   textobject = {textobject[1], textobject[2]}}
+    local range = {textobject = {textobject[1], textobject[2]}}
     setmetatable(range, range_mt)
 
     -- range._bounds[is_inner] = {left, right}
@@ -40,11 +34,6 @@ function module.range:new(params)
     end
     return range
 end
-
-function module.range:get_focus()
-    return self:get_position(unpack(self.focus))
-end
-
 
 function module.range:get_bounds(inner, linewise)
     local result = self._bounds[not (not inner)]

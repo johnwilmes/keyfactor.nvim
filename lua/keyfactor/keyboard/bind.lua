@@ -19,6 +19,9 @@ end
 
 map(trigger, result, mods) 
 
+map(k.word, {defaults={textobject=textobjects.word}}, selection_map)
+
+
 
 Things we might want to do that are currently inconvenient:
     - extend or modify a table parameter, rather than replacing it

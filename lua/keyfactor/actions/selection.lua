@@ -25,16 +25,20 @@ module.select_hop = module.selector:new()
         textobject
 
         reverse = boolean - which direction we search, in the document
-        inner = boolean - whether we consider the inner or outer boundary of the textobject in
-                determining its position. (I'll just always have this set to true, but in principle
-                it could be set to false)
-        stretch = boolean - passed to range:update
+        outer = boolean - whether we consider the inner or outer boundary of the textobject in
+                determining its position. 
+        side = 1 or 2 (default 2) - whether we consider side 1 or side 2 of the textobject in
+                determining its position
         exterior = boolean - reverse xor exterior is true iff we consider the left side of the
                 textobject in determining its position. 
                 Additionally, if exterior is true, the new selection is given by combining the
                 focus side of the current selection with the appropriate (nearer) side of the
                 chosen text object
+        partial = boolean - if current position is within a textobject, only select from position
+            to one side of textobject. (or, if exterior, if current position is between
+            textobjects). Should this be implied by augment?
         augment = boolean - whether we replace current selection vs extend/reduce it
+        stretch = boolean - passed to range:update
 ]]
 
 function module.select_next:_exec(params)
@@ -52,9 +56,11 @@ function module.select_next:_exec(params)
         local delta = params.textobject:get_next(range:get_focus(), tobj_params)
         if delta then
             if not (params.augment or params.exterior) then
+                -- replace 
                 range = delta:new{focus={reverse=params.reverse,
                                          inner=range.focus.inner}}
             else
+                -- 
                 range = range:update(delta, update_params)
             end
             table.insert(result, range)
