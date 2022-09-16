@@ -413,15 +413,62 @@ end
 
 
 
-function module.resolve(bindings, context)
-    --[[
-        context: action, params, key, mods, layers, mode, submode, (window+buffer???)
-            - mods/layers are flags tables
-            - mode/submode are strings
+do
+    local function get_binding_handler(binding)
+        local b = rawget(getmetatable(binding) or {}, "__bind")
+        if (not b) and utils.is_callable(binding) then
+            b = binding
+        end
+        if (not b) and type(b)=="table" then
+            b = module.resolve
+        end
+        return b
+    end
 
-    Binding resolution:
-        First, recursively apply bindings indexed from 1 to #bindings, in order of increasing index
-        Then, if any table keys match any of the names of the keypress, recursively apply them (in
-        an unspecified order)
-    --]]
+    function module.resolve(bindings, context)
+        --[[
+            context: action, params, key, mods, layers, mode, submode, (window+buffer???)
+                - mods/layers are flags tables
+                - mode/submode are strings
+            context gets filled as needed
+
+        Binding resolution:
+            First, recursively apply bindings indexed from 1 to #bindings, in order of increasing index
+            Then, if any table keys match any of the names of the keypress, recursively apply them (in
+            an unspecified order)
+
+        Applying a binding:
+            if its metatable has "__bind" then call that
+            else if it is itself callable, then call it
+            else if it is a table then apply module.resolve to it
+            else error
+        --]]
+        
+        -- TODO fill context
+        
+        if type(bindings)~="table" then
+            bindings = {bindings}
+        end
+
+        for _,binding in ipairs(bindings) do
+            local b = get_binding_handler(binding)
+            if (not b) then
+                -- TODO error
+            end
+            context.action, context.params = b(binding, context)
+        end
+
+        for key,binding in pairs(bindings) do
+            if type(key)=="string" then
+                -- TODO if key refers to context.key then
+                local b = get_binding_handler(binding)
+                if (not b) then
+                    -- TODO error
+                end
+                context.action, context.params = b(binding, context)
+            end
+        end
+    end
 end
+
+return module
