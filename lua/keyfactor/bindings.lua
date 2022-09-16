@@ -364,11 +364,11 @@ do
             local context = {action=action, params=my_params}
             action, my_params = module.resolve(obj.bindings, context)
         end
-        if obj.name=="last" then
+        if obj.name=="last" and obj.replaced_action then
             kf.exec(obj.replaced_action, params)
         end
         kf.exec(action, my_params)
-        if obj.name=="first" then
+        if obj.name=="first" and obj.replaced_action then
             kf.exec(obj.replaced_action, params)
         end
     end
@@ -379,9 +379,38 @@ do
 end
 
 do
-    module.let = ...
-    module.extend = ...
+    local mt = {}
+    function mt:__bind(context)
+        return context.action, vim.tbl_extend("force", context.params or {}, self.params)
+    end
+
+    module.let = function(params)
+        return setmetatable({params=params}, mt)
+    end
 end
+
+do
+    local mt = {}
+    function mt:__bind(context)
+        return context.action, vim.tbl_deep_extend("force", context.params or {}, self.params)
+    end
+
+    module.extend = function(params)
+        return setmetatable({params=params}, mt)
+    end
+end
+
+do
+    local mt = {}
+    function mt:__bind(context)
+        return context.action, self.params
+    end
+
+    module.let_only = function(params)
+        return setmetatable({params=params}, mt)
+    end
+end
+
 
 
 function module.resolve(bindings, context)
