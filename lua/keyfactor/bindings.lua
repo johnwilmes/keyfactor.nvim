@@ -21,26 +21,9 @@ BINDING:
     "on"?); subsequent calling or indexing (other than "_else/Else") gets passed to this binding
     - call: parameters should be bindings or tables of bindings
 
+    -- TODO have an interface for registering "known" bindings
 --]]
 do
-    local mt = {}
-
-    local function new(old)
-        old = old or {}
-        local obj = old[old] or {}
-        obj = {--shallow copy of used fields
-            condition=obj.condition,
-            on_true=obj.on_true,
-            on_false=obj.on_false,
-            unresolved=obj.unresolved
-        }
-
-        local new = {}
-        new[new] = obj -- stored here to avoid index conflicts
-
-        return setmetatable(new, mt)
-    end
-
     local conditional_mt = {}
     function conditional_mt:__call(context)
         if self.mode then
@@ -148,6 +131,24 @@ do
             end
         end
         return setmetatable(conditional, conditional_mt)
+    end
+
+    local mt = {}
+
+    local function new(old)
+        old = old or {}
+        local obj = old[old] or {}
+        obj = {--shallow copy of used fields
+            condition=obj.condition,
+            on_true=obj.on_true,
+            on_false=obj.on_false,
+            unresolved=obj.unresolved
+        }
+
+        local new = {}
+        new[new] = obj -- stored here to avoid index conflicts
+
+        return setmetatable(new, mt)
     end
 
     function mt:__bind(context)
@@ -264,7 +265,7 @@ PARAMS
 
 
 
-result: sets action to wrapper, and returns (wrapper, existing params)
+result of binding: returns (wrapper, existing params)
     - wrapper tracks (existing action), ACTION, PARAMS, and BINDINGS
 
 execution of wrapper with (call params):
@@ -278,15 +279,116 @@ execution of wrapper with (call params):
 ]]
 
 do
-    module.only = ...
-    module.first = ...
-    module.last = ...
+    local mt = {}
+
+    local function new(old)
+        local obj
+        if type(old)=="string" then
+            obj = {name=old}
+        else
+            old = old[old]
+            obj = {--shallow copy of used fields
+                name=old.name
+                action=old.action,
+                unresolved=old.unresolved,
+                params=old.params,
+                bindings=old.bindings
+            }
+        end
+
+        local new = {}
+        new[new] = obj -- stored here to avoid index conflicts
+
+        return setmetatable(new, mt)
+    end
+
+    function mt:__index(key)
+        local result = new(self) -- avoid side effects, don't modify self
+        local obj = result[result] -- stored here to avoid index conflicts
+
+        if key=="with" then
+            if obj.bindings~=nil then
+                -- TODO error
+            end
+            if obj.unresolved then
+                obj.action = obj.unresolved
+                obj.unresolved = nil
+            elseif not obj.action then
+                --TODO error
+            end
+            obj.bindings = false
+        elseif obj.unresolved then
+            obj.unresolved=obj.unresolved[key]
+        elseif obj.action==nil then
+            --TODO lookup action
+        end
+
+        return result
+    end
+
+    function mt:__call(...)
+        local result = new(self) -- avoid side effects, don't modify self
+        local obj = result[result] -- stored here to avoid index conflicts
+        if obj.action==nil then
+            if obj.unresolved~=nil then
+                --TODO error
+            end
+            obj.action = ...
+        elseif obj.bindings==nil then
+            if obj.params~=nil then
+                --TODO error
+            end
+            obj.params = ...
+        elseif obj.bindings==false then
+            obj.bindings = {...}
+        else
+            --TODO error
+        end
+
+        return result
+    end
+
+    function mt:__bind(context)
+        local result = new(self)
+        local obj = result[result]
+        obj.replaced_action = context.action
+
+        return result, context.params
+    end
+
+    function mt:__exec(params)
+        local obj = self[self]
+        local my_params = obj.params or params
+        local action = obj.action
+        if obj.bindings then
+            local context = {action=action, params=my_params}
+            action, my_params = module.resolve(obj.bindings, context)
+        end
+        if obj.name=="last" then
+            kf.exec(obj.replaced_action, params)
+        end
+        kf.exec(action, my_params)
+        if obj.name=="first" then
+            kf.exec(obj.replaced_action, params)
+        end
+    end
+
+    module.only = new("only")
+    module.first = new("first")
+    module.last = new("last")
+end
+
+do
+    module.let = ...
+    module.extend = ...
 end
 
 
 function module.resolve(bindings, context)
     --[[
-        context: action, params, key, mods, layers, mode (window+buffer???)
+        context: action, params, key, mods, layers, mode, submode, (window+buffer???)
+            - mods/layers are flags tables
+            - mode/submode are strings
 
     Binding resolution:
         First, recursively apply bindings indexed from 1 to #bindings, in order of increasing index
