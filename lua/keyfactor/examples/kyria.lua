@@ -16,7 +16,7 @@ For each active layers, from highest to lowest index:
     If action is not nil (and if "continue" flag is not set?) then break
 
 Binding resolution:
-        First, recursively apply bindings indexed from 1 to #layer
+        First, recursively apply bindings indexed from 1 to #bindings
         Then, if any table keys match any of the names of the keypress, apply them (in an unspecified order)
 
 base={
@@ -45,8 +45,10 @@ local selection = {
     only.select_textobject,
     reversible,
     on.control.let{augment=true},
+    -- choose is based on view port, so this lets us select into viewport
     on.choose.let{choose="auto"},
     on.multiple{
+        -- control(augment): whether we subselect, or just select from everything
         on.alt.let{multiple="split"}._else.let{multiple="select"}
     }._else{
         on.alt.let{partial=true},
@@ -147,6 +149,9 @@ bindings.motion = {
         comment={seekable, let{textobject=textobjects.comment}},
         indent={seekable, let{textobject=textobjects.indent}},
         mark={--[[TODO like base-layer mark, but prompt for mark instead of using default]]}
+        -- TODO tab = go to focus
+        -- TODO enter = "add new range to selection, immediately following focus, constructed the
+        --              same way as the focus" ???!!
     },
 }
 
