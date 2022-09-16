@@ -1,7 +1,112 @@
 local kf = require("keyfactor.base")
 
-
 local module = {}
+
+
+--[[
+
+    params:
+        orientation
+            boundary = "inner" or "outer"
+            side = "left" or "right"
+        reverse (boolean)
+        partial (boolean)
+        augment (boolean)
+        multiple = "split" or "select" or falsey
+            (default to "select" if truthy and not "split"?)
+        choose = "auto" or "telescope" or "hop" or falsey
+            (default to "auto" if truthy and not "telescope" or "hop"?)
+        ranges = {...}
+
+
+--]]
+module.select_textobject = Operator()
+local function get_partial_side(pos, next_range, params)
+end
+
+function module.select_textobject:exec(selection, params)
+    if params.multiple then
+        if params.augment then
+            -- TODO iterate over existing selection, and either subselect or internally split
+            -- (if selection is empty, do nothing)
+            for entry in selection:iter() do
+                local range = entry.range:read()[params.orientation.boundary]
+                local matches = params.textobject:get_all{range=range, buffer=params.buffer}
+            end
+        else
+            -- TODO replace selection by selecting from/splitting entire buffer
+        end
+        if params.choose then
+            -- TODO if current (replaced) selection is not empty, use chooser to select a subset of
+            -- the ranges
+            -- chooser({select multiple, on_confirm=...})
+        end
+    else
+        if params.choose then
+            -- TODO if params.choose then select single range from entire buffer (telescope) or
+            --      from viewport (hop). Do so regardless of #selection
+            -- TODO first restrict to focus
+            -- if (params.augment or params.partial) and selection is empty, treat selection as
+            --      first line/col of buffer, or if params.reverse then last line/col
+            --
+            -- chooser({select one, on_confirm=...})
+        else
+            local tobj_params = {
+                orientation = {
+                    boundary=params.orientation.boundary,
+                    side=(not params.partial) and params.orientation.side,
+                },
+                reverse = params.reverse,
+                buffer = params.buffer,
+            }
+            local inverse = kf.invert_orientation(params.orientation)
+            for entry in selection:iter() do
+                local range = entry.range:read()
+                local pos = range[params.orientation]
+                tobj_params.position = pos
+                local next_range = params.textobject:get_next(tobj_params)
+                if params.augment then
+                    if next_range~=nil then
+                        local old = range[inverse.side]
+                        local new
+                        if params.partial then
+                            new = get_partial_side(pos, next_range, params)
+                        else
+                            new = next_range[params.orientation.side]
+                        end
+                        -- TODO truncate new to old
+                        local bounds = {old[1], old[2], new[1], new[2]}
+                        -- TODO sort bounds
+                        entry.range:write(kf.range(bounds))
+                    end -- else, next_range==nil; range stays the same
+                else
+                    if next_range~=nil and params.partial then
+                        local old = range[params.orientation.side]
+                        local new = get_partial_side(pos, next_range, params)
+                        -- TODO truncate new to old
+                        local bounds = {old[1], old[2], new[1], new[2]}
+                        -- TODO sort bounds
+                        entry.range:write(kf.range(bounds))
+                    else
+                        entry.range:write(next_range)
+                    end
+                end
+
+                local bounds = {}
+
+                
+            end
+        end
+    end
+end
+
+
+
+
+
+
+
+
 
 module.selector = kf.action:new()
 

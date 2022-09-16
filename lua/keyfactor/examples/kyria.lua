@@ -49,7 +49,7 @@ local selection = {
     on.choose.let{choose="auto"},
     on.multiple{
         -- control(augment): whether we subselect, or just select from everything
-        on.alt.let{multiple="split"}._else.let{multiple="select"}
+        on.shift.let{multiple="split"}._else.let{multiple="select"}
     }._else{
         on.alt.let{partial=true},
     },
