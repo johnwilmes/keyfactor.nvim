@@ -22,6 +22,25 @@ local module = {}
 --]]
 module.select_textobject = Operator()
 local function get_partial_side(pos, next_range, params)
+    local sides = {next_range["left"], next_range["right"]}
+    local index
+
+
+
+    local cmp = (params.reverse and "<"
+    sides = utils.list.filter(sides, function(v) return v[...] < pos end)
+
+    sides = utils.list.sort(sides, function(v) return v[...] end)
+
+    --[[
+        filter sides: remove anything that isn't on the desired side of pos
+            (as determined by params.reverse, comparing based on params.orientation.boundary)
+
+        sort sides (reversed in params.reverse)
+
+        return first element of sides
+    --]]
+
 end
 
 function module.select_textobject:exec(selection, params)
