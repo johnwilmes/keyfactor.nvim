@@ -132,6 +132,7 @@ bindings.motion = {
         do={only.round_selection,
             on.control{
                 -- round to inner/outer/left/right
+                -- TODO should linewise rounding be possible?
                 on.shift{
                     on.alt.let{boundary="inner"}._else.let{side="left"}
                 }._else{

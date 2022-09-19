@@ -7,7 +7,7 @@ module = {}
         offset
         align=top or focus (or bottom?)
         rotate= number of steps to rotate from alignment (positive or negative)
-        multiple=larger or smaller or selection or register
+        length=larger or smaller or selection or register
 
 
 --]]
@@ -28,10 +28,10 @@ function module.paste:exec(selection, params)
         if params.linewise then
             local line = pos[1]
             if paste_after then line = line+1 end
-            local range = kf.insert_lines(buffer, line, inner, outer)
+            local range = kf.insert_lines(selection.buffer, line, inner, outer)
             handle.range:write(range)
         else
-            local range = kf.insert_text(buffer, pos, inner, outer)
+            local range = kf.insert_text(selection.buffer, pos, inner, outer)
             handle.range:write(range)
         end
     end
@@ -47,15 +47,15 @@ module.yank = Operator{"register"}
 function module.yank:exec(selection, params)
     local iter_params = {
         orientation=params.orientation,
-        register=params.register,
+        register=vim.tbl_extend("force", params.register, {length="selection"}),
     }
 
     for handle in selection:iter(iter_params) do
         local inner, outer
         if params.linewise then
-            inner, outer = kf.get_lines(handle.range:read())
+            inner, outer = kf.get_lines(selection.buffer, handle.range:read())
         else
-            inner, outer = kf.get_text(handle.range:read())
+            inner, outer = kf.get_text(selection.buffer, handle.range:read())
         end
         if params.orientation.boundary=="inner" then
             handle.register:write({inner=inner})
@@ -107,7 +107,7 @@ function module.delete:exec(selection, params)
         end
 
         for _,block in ipairs(merged) do
-            vim.api.nvim_buf_set_lines(params.buffer, block[1], block[2], false, {})
+            vim.api.nvim_buf_set_lines(selection.buffer, block[1], block[2], false, {})
         end
 
         -- TODO we assume that selection is created by setting extmarks using strict=false, or that
@@ -118,9 +118,68 @@ function module.delete:exec(selection, params)
             local range = handle.range:read()[params.orientation.boundary]
             local left, right = range[1], range[2]
             if left != right then
-                vim.api.nvim_buf_set_text(params.buffer, left[1], left[2], right[1], right[2], {})
+                vim.api.nvim_buf_set_text(selection.buffer, left[1], left[2], right[1], right[2], {})
             end
         end
         -- TODO is selection update implicit?
     end
+end
+
+module.replace = Operator{"register"}
+function module.replace:exec(selection, params)
+    local iter_params = {
+        orientation={boundary=params.orientation.boundary, side="left"},
+        register=params.register,
+    }
+    if params.linewise then
+        --TODO
+    else
+        for handle in selection:iter(iter_params) do
+            local range = handle.range:read()
+            if params.orientation.boundary=="inner" then
+                range = kf.range(range["inner"])
+            end
+            local inner, outer = handle.register:read()
+            local out_range
+            if params.linewise then
+                --TODO make sure that the selection extmarks for overlapping ranges end up
+                --continuing to overlap; otherwise we will probably need to proceed more carefully
+                --as in module.delete
+                out_range = kf.replace_lines(selection.buffer, range, inner, outer)
+            else
+                out_range = kf.replace_text(selection.buffer, range, inner, outer)
+            end
+            handle.range:write(out_range)
+        end
+    end
+end
+
+module.wring = Operator()
+function module.wring:exec(selection, params)
+    --[[
+    check if selection corresponds to captured action+prev_params (w/ stored register info)
+    if so:
+        use register name specified in params, falling back to register stored at capture
+        if register name specified in params is overriding a different stored reg name:
+            start with offset = 0
+        else
+            start with stored offset
+
+        let delta = max(1,params.register.offset) * (-1 if params.reverse else +1)
+
+        new_reg = {name=as above, offset=starting offset + delta, align/multiple from params
+        falling back to stored}
+
+        set prev_params.register = new_reg
+
+        if any bindings were specified with capture, apply them to action+prev_params
+        then exec action+params
+
+        arrange things so that resulting selection continues to correspond to same captured
+        action+prev params
+    else:
+        if _else (or fallback? default_to?) binding(s) were given, apply them to the action
+            nil+(current)params
+
+    --]]
 end
