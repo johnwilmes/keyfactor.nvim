@@ -102,10 +102,8 @@ bindings.base = {
         seek={only(seek), selection},
 
         delete={only.delete, operator, register},
-        insert={only.reinsert,
-            point_operator,
-            actions.redo:capture{reset, point_operator},
-            actions.insert:prompt()},
+        insert={only.insert(capture.redo(only.reinsert, let_only{}, point_operator)),
+            point_operator}
         paste={only.paste,
             point_operator,
             actions.wring:capture(), -- TODO insteat capture.wring?

@@ -378,6 +378,7 @@ do
     module.last = new("last")
 end
 
+-- PARAM MANIPULATION
 do
     local mt = {}
     function mt:__bind(context)
@@ -388,7 +389,6 @@ do
         return setmetatable({params=params}, mt)
     end
 end
-
 do
     local mt = {}
     function mt:__bind(context)
@@ -399,7 +399,6 @@ do
         return setmetatable({params=params}, mt)
     end
 end
-
 do
     local mt = {}
     function mt:__bind(context)
@@ -411,8 +410,83 @@ do
     end
 end
 
+-- CONTEXT CAPTURE
+--[[
+    at declaration, grab optional binding arguments
+        - for redo, would be nice to be able to specify scope:
+        global/window/buffer/window+buffer...
+            - actually this could be specified with action.redo:new{scope=...}
+    at binding, grab context and wrap action so we can grab params at execution
+    at execution, grab params
+        - for wring, also need to get undo node/selection at this point, so we know where to go
+        when we undo
+        - wring is always scoped to buffer+selection?
+    
+    Wring *action* declaration: optional ._else indexing to specify alternate set of bindings
+    Wring execution:
+        if current selection/state is valid ("corresponds" to wring capture)
+            compute new register
+            if new reg is different from current selection's then
+                undo to point of capture
+                starting from the actual action/params that were performed for that selection,
+                    apply an bindings specified with capture
+                    execute the result
+            else
+                notify somehow that no change in register is available (some kind of error
+                message?)
+        else
+            if "_else" bindings were provided with action declaration
+                apply them, starting from nil/currently passed params
+            else
+                notify somehow that wringing is invalid (some kind of error message?)
+--]]
+do
+    local mt = {}
+    local module.capture = {}
 
+    module.capture.wring
+    module.capture.redo
+end
 
+-- PROMPT
+--[[
+
+    textobject prompt: search/surround/char
+        - at declaration, could maybe specify some ways of modifying the prompt
+        - at binding, wrap the action
+        - at execution
+            - enter appropriate prompt mode
+            - on cancel: if specific cancel specified then do it, otherwise just exit mode
+            - on confirm: if different confirm provided at declaration, do it
+                otherwise, set textobject=(self with argument given by prompt),
+                then execute wrapped action with params from execution
+
+    register prompt:
+        like textobject prompt, but default on confirm is to set register={...}
+        - sometimes we will want to use prompt, but the action will then be to set the default
+        register, which might be done via a different on_confirm?
+
+    mark prompt:
+        like register prompt...
+
+    textobject "choose" prompt:
+        - can be either single or multiple selection, and either hop-style or telescope-style
+        - at least some of the time, we need to partially perform the select_textobject action
+        first (e.g., for "multiple" selection, we first select everything then use choose to
+        subselect...; possible also for "directional" hop), so this isn't bound like the others
+
+    insert prompt
+        - always modifies the buffer
+        - but we can have it also call some other stuff on confirm?
+            - in particular, want to be able to set "redo"
+            - default on_confirm:
+                set action=nil,
+                modify params with params.insert={text, selection...},
+                then apply any bindings passed to insert at declaration,
+                then execute any resulting action
+--]]
+
+-- BINDING RESOLUTION
 do
     local function get_binding_handler(binding)
         local b = rawget(getmetatable(binding) or {}, "__bind")
