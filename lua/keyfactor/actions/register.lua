@@ -4,9 +4,9 @@ module = {}
 
     register
         name
-        offset
+        depth
         align=top or focus (or bottom?)
-        rotate= number of steps to rotate from alignment (positive or negative)
+        offset= number of steps to rotate from alignment (positive or negative)
         length=larger or smaller or selection or register
 
 
@@ -156,12 +156,95 @@ end
 
 module.wring = Operator()
 function module.wring:exec(selection, params)
+    local target = wring_targets[params.buffer]
+    if target and target.new_selection==selection.id then
+        local register = {} -- new register data to use
+        local preg = params.register or {}
+        local should_increment = true
+        if preg.name then
+            -- TODO validate: this is an already existing register name
+            register.name = preg.name
+            should_increment = should_increment and (register.name==target.register.name)
+        end
+        if preg.align then
+            --TODO validate
+            register.align = preg.align
+            should_increment = should_increment and (register.align==target.register.align)
+        end
+        if preg.length then
+            --TODO validate
+            register.length = preg.length
+            should_increment = should_increment and (register.length==target.register.length)
+        end
+
+        if type(preg.depth)=="number" and preg.depth >= 0 then
+            register.depth = preg.depth
+        elseif should_increment and self.increment_depth then
+            if params.reverse then
+                register.depth=math.max(target.register.depth-1,0)
+            else
+                local max_depth
+                -- TODO get max_depth of register (register.name, maybe also current
+                -- scope/buffer/selection can affect register max depth?)
+                register.depth=math.min(target.register.depth+1,max_depth)
+            end
+        end
+
+        -- TODO if we change the depth, then we should NOT increment offset;
+        -- in fact, we should reset offset to 0 (if not specified in preg.offset)
+        if type(preg.offset)=="number" then
+            register.offset=preg.offset
+        elseif should_increment and self.increment_offset then
+            if params.reverse then
+                register.offset=target.register.offset-1
+                -- TODO modulo register size
+            else
+                register.offset=target.register.offset+1
+                -- TODO modulo register size
+            end
+
+        end
+
+        if register.name==target.register.name then
+            register = vim.tbl_extend("keep", register, target.register)
+        else
+            --TODO fill register with defaults for current scope
+        end
+
+        if vim.deep_equal(register, target.register) then
+            -- TODO no change to be done, flash an error
+        else
+            -- TODO undo to capture.undo_node and capture.old_selection
+            --      (only change selection in current window)
+            target.register = register
+            local action = target.action
+            local params = vim.tbl_extend("force", target.params, {register=register})
+            if target.bindings then
+                local context = {action=action, params=params}
+                action, params = require("keyfactor.bindings").resolve(target.bindings, context)
+            end
+            kf.execute(action, params)
+            
+            -- record resulting selection id so that wringing remains valid
+            local selection = kf.get_selection(scope)
+            target.new_selection = selection.id
+        end
+
+    elseif self.fallback then
+            local action, params = require("keyfactor.bindings").resolve(self.fallback, {params=params})
+            kf.execute(action, params)
+    else
+        -- TODO flash error
+    end
+end
+
+
     --[[
     check if selection corresponds to captured action+prev_params (w/ stored register info)
     if so:
         use register name specified in params, falling back to register stored at capture
         if register name specified in params is overriding a different stored reg name:
-            start with offset = 0
+            start with depth = 0
         else
             start with stored offset
 
@@ -182,4 +265,21 @@ function module.wring:exec(selection, params)
             nil+(current)params
 
     --]]
+
+function wring_capture(params)
+    local capture = copy(self)
+    capture.params = params
+    local scope = kf.get_scope(params)
+    local selection = kf.get_selection(scope)
+    capture.undo_node = --TODO get undo node
+    capture.old_selection = selection.id
+
+    -- TODO explicitly fill register!
+
+    kf.execute(self.action, params)
+
+    selection = kf.get_selection(scope)
+    capture.new_selection = selection.id
+
+    wring_targets[scope.buffer] = capture
 end

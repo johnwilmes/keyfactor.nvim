@@ -2,7 +2,7 @@ local module = {}
 
 --[[
 
-on CONDITION  BINDING [._else] BINDING
+on CONDITION [.bind]  BINDING [._else BINDING]
 
 CONDITION: index into `on` object
     - string index: unambiguously of form `mod` or `mode` or `submode`,
@@ -22,6 +22,8 @@ BINDING:
     - call: parameters should be bindings or tables of bindings
 
     -- TODO have an interface for registering "known" bindings
+    
+    -- TODO optional ".bind" keyword after condition
 --]]
 do
     local conditional_mt = {}
@@ -251,19 +253,14 @@ end
 
 --[[
 
-(only/first/last) ACTION {PARAMS} .with(BINDINGS)
+(only/first/last) ACTION [ACTION STUFF] .bind(BINDINGS)
 
 ACTION
     - index with string name of "known" action
     - call with action object (or callable??)
 
-PARAMS
-    - optionally: call result with dictionary of params
-
-.with(BINDINGS)
+.bind(BINDINGS)
     -optionally: specify one or more bindings/binding tables
-
-
 
 result of binding: returns (wrapper, existing params)
     - wrapper tracks (existing action), ACTION, PARAMS, and BINDINGS
@@ -275,6 +272,9 @@ execution of wrapper with (call params):
             - presumably derived at execution time, since getting "mode" right seems important...
     - call (existing action) with (call params) and call (a, p), as appropriate, in the appropriate
     order, as determined by whether existing action is non-nil and whether this is only/first/last
+
+-- TODO replace ".with" with ".bind"
+-- send calls prior to .bind to (unresolved) action
 
 ]]
 
@@ -422,7 +422,7 @@ end
         when we undo
         - wring is always scoped to buffer+selection?
     
-    Wring *action* declaration: optional ._else indexing to specify alternate set of bindings
+    Wring *action* declaration: optional .with_fallback indexing to specify alternate set of bindings
     Wring execution:
         if current selection/state is valid ("corresponds" to wring capture)
             compute new register
