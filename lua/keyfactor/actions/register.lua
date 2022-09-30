@@ -1,5 +1,7 @@
 module = {}
 
+local action = require("keyfactor.actions.base").action
+
 --[[
 
     register
@@ -11,8 +13,7 @@ module = {}
 
 
 --]]
-module.paste = Operator{"register"}
-function module.paste:exec(selection, params)
+module.paste = action(function(params)
     local paste_after = (params.orientation.side=="right")
     local iter_params = {
         orientation=params.orientation,
@@ -22,7 +23,7 @@ function module.paste:exec(selection, params)
         reverse=paste_after,
     }
 
-    for handle in selection:iter(iter_params) do
+    for handle in params.selection:iter(iter_params) do
         local pos = handle.range:read()[params.orientation]
         local inner, outer = handle.register:read()
         if params.linewise then
@@ -35,7 +36,9 @@ function module.paste:exec(selection, params)
             handle.range:write(range)
         end
     end
-end
+
+end, {"selection", "orientation", "register"})
+
 
 --[[
     TODO:
@@ -43,14 +46,13 @@ end
         - allow to specify alignment?
             (could use shift key to specify focus alignment?)
 --]]
-module.yank = Operator{"register"}
-function module.yank:exec(selection, params)
+local function do_yank(params)
     local iter_params = {
         orientation=params.orientation,
         register=vim.tbl_extend("force", params.register, {length="selection"}),
     }
 
-    for handle in selection:iter(iter_params) do
+    for handle in params.selection:iter(iter_params) do
         local inner, outer
         if params.linewise then
             inner, outer = kf.get_lines(selection.buffer, handle.range:read())
@@ -65,9 +67,10 @@ function module.yank:exec(selection, params)
     end
 end
 
-module.delete = Operator{"register"}
-function module.delete:exec(selection, params)
-    module.yank:exec(selection, params)
+module.yank = action(do_yank, {"selection", "orientation", "register"})
+
+module.delete = action(function(params)
+    do_yank(params)
 
     -- use left side for iteration order, so we guarantee that previously seen ranges started
     -- to left of current range in iteration
@@ -87,7 +90,7 @@ function module.delete:exec(selection, params)
         local prev_right = -1 -- previous endpoint
         local prev_left = -1
 
-        for handle in selection:iter{orientation=iter_orientation} do
+        for handle in params.selection:iter{orientation=iter_orientation} do
             local range = handle.range:read()[params.orientation.boundary]
             local left = max(range[1][1]-total, prev_right)
             local right = max(range[2][1]+1-total, prev_right)
@@ -112,9 +115,9 @@ function module.delete:exec(selection, params)
 
         -- TODO we assume that selection is created by setting extmarks using strict=false, or that
         -- the range will otherwise be truncated...
-        selection:update({ranges=output})
+        params.selection:update({ranges=output})
     else
-        for handle in selection:iter{orientation=iter_orientation} do
+        for handle in params.selection:iter{orientation=iter_orientation} do
             local range = handle.range:read()[params.orientation.boundary]
             local left, right = range[1], range[2]
             if left != right then
@@ -123,10 +126,9 @@ function module.delete:exec(selection, params)
         end
         -- TODO is selection update implicit?
     end
-end
+end, {"selection", "orientation", "register"})
 
-module.replace = Operator{"register"}
-function module.replace:exec(selection, params)
+module.replace = action(function(params)
     local iter_params = {
         orientation={boundary=params.orientation.boundary, side="left"},
         register=params.register,
@@ -134,7 +136,7 @@ function module.replace:exec(selection, params)
     if params.linewise then
         --TODO
     else
-        for handle in selection:iter(iter_params) do
+        for handle in params.selection:iter(iter_params) do
             local range = handle.range:read()
             if params.orientation.boundary=="inner" then
                 range = kf.range(range["inner"])
@@ -152,134 +154,177 @@ function module.replace:exec(selection, params)
             handle.range:write(out_range)
         end
     end
-end
+end, {"selection", "orientation", "register"})
 
-module.wring = Operator()
-function module.wring:exec(selection, params)
-    local target = wring_targets[params.buffer]
-    if target and target.new_selection==selection.id then
-        local register = {} -- new register data to use
-        local preg = params.register or {}
-        local should_increment = true
-        if preg.name then
-            -- TODO validate: this is an already existing register name
-            register.name = preg.name
-            should_increment = should_increment and (register.name==target.register.name)
-        end
-        if preg.align then
-            --TODO validate
-            register.align = preg.align
-            should_increment = should_increment and (register.align==target.register.align)
-        end
-        if preg.length then
-            --TODO validate
-            register.length = preg.length
-            should_increment = should_increment and (register.length==target.register.length)
-        end
 
-        if type(preg.depth)=="number" and preg.depth >= 0 then
-            register.depth = preg.depth
-        elseif should_increment and self.increment_depth then
-            if params.reverse then
-                register.depth=math.max(target.register.depth-1,0)
+do
+    local is_valid_align = {top=true, focus=true, bottom=true}
+    local is_valid_shape = {larger=true, smaller=true, selection=true, register=true}
+    local wring_target = {}
+
+    -- NOTE: wrapped actions are expected to respect scope, selection, and register params
+    -- (wring doesn't really make sense for actions that don't respect these...)
+    local fill = {"scope", "selection", "register"}
+
+    local wring_capture_mt = {}
+    function wring_capture_mt:__call(params)
+        local selection = params.selection
+        local target = {
+            actions=self.actions,
+            params=params,
+            register=params.register,
+            before=selection.id,
+        }
+        if self.go then
+            kf.execute(self.actions, params)
+        end
+        target.after=selection.id
+        -- TODO someday, when we have selection-scoped undo,
+        -- this could instead be per-window+buffer
+        wring_target[params.buffer] = target
+    end
+
+    function do_wring(params)
+        local selection = params.selection
+        local fallback = params.fallback
+        local increment = params.increment
+        params = utils.table.delete(params, {"fallback", "increment"})
+
+        local target = wring_target[params.buffer]
+        if target and target.after==selection.id then
+            --[[
+
+            if any parameters of register have been set to something different, then don't increment
+                (name, align, shape, depth, offset)
+                -- TODO could have a force_increment parameter to override?
+            otherwise, increment only depth OR offset, dependening on params.increment (or stored
+            increment value)
+            --]]
+
+            local register = vim.deepcopy(params.register or {}) -- new register data to use
+            -- validate register and fill by default from target.register
+            if not kf.register[register.name] then
+                -- TODO we are checking if register.name already exists...
+                register.name = target.register.name
+            end
+            if not is_valid_shape[register.shape] then
+                register.shape = target.register.shape
+            end
+            if not is_valid_align[register.align] then
+                register.align = target.register.align
+            end
+            if not (type(register.depth)=="number" and register.depth >= 0) then
+                if register.name==target.register.name then
+                    register.depth = target.register.depth
+                else
+                    register.depth=0
+                end
+            end
+            if type(register.offset)~="number" then
+                if (register.name==target.register.name and
+                    register.depth==target.register.depth and
+                    register.align==target.register.align) then
+                    -- only default to old offset if name/depth/alignment have not changed
+                    register.offset = target.register.offset
+                else
+                    register.offset=0
+                end
+            end
+
+            if vim.deep_equal(register, target.register) then
+                if increment=="align" or increment=="offset" then
+                    if params.reverse then
+                        register.offset=register.offset-1
+                    else
+                        register.offset=register.offset+1
+                    end
+                    -- TODO take register.offset modulo register size
+                else
+                    if params.reverse then
+                        register.depth=register.depth-1
+                    else
+                        register.depth=register.depth+1
+                    end
+                    -- TODO get max_depth of register (register.name, maybe also current
+                    -- scope/buffer/selection can affect register max depth?)
+                    --
+                    -- truncate register.depth to range [0, max_depth]
+                end
+            end
+
+            if vim.deep_equal(register, target.register) then
+                -- TODO flash error message
             else
-                local max_depth
-                -- TODO get max_depth of register (register.name, maybe also current
-                -- scope/buffer/selection can affect register max depth?)
-                register.depth=math.min(target.register.depth+1,max_depth)
+                -- TODO undo
+                kf.undo{selection=target.before}
+
+                -- TODO is this the right extend?
+                params = vim.tbl_deep_extend("force", target.params, params, {register=register})
+                kf.execute(target.actions, params)
+                
+                -- record resulting selection id so that wringing remains valid
+                target.after = selection.id
+                target.register = register
             end
-        end
-
-        -- TODO if we change the depth, then we should NOT increment offset;
-        -- in fact, we should reset offset to 0 (if not specified in preg.offset)
-        if type(preg.offset)=="number" then
-            register.offset=preg.offset
-        elseif should_increment and self.increment_offset then
-            if params.reverse then
-                register.offset=target.register.offset-1
-                -- TODO modulo register size
-            else
-                register.offset=target.register.offset+1
-                -- TODO modulo register size
-            end
-
-        end
-
-        if register.name==target.register.name then
-            register = vim.tbl_extend("keep", register, target.register)
+        elseif fallback then
+            kf.execute(fallback, params)
         else
-            --TODO fill register with defaults for current scope
+            -- TODO flash error
         end
+    end
 
-        if vim.deep_equal(register, target.register) then
-            -- TODO no change to be done, flash an error
-        else
-            -- TODO undo to capture.undo_node and capture.old_selection
-            --      (only change selection in current window)
-            target.register = register
-            local action = target.action
-            local params = vim.tbl_extend("force", target.params, {register=register})
-            if target.bindings then
-                local context = {action=action, params=params}
-                action, params = require("keyfactor.bindings").resolve(target.bindings, context)
-            end
-            kf.execute(action, params)
-            
-            -- record resulting selection id so that wringing remains valid
-            local selection = kf.get_selection(scope)
-            target.new_selection = selection.id
-        end
-
-    elseif self.fallback then
-            local action, params = require("keyfactor.bindings").resolve(self.fallback, {params=params})
-            kf.execute(action, params)
-    else
-        -- TODO flash error
+    module.wring = action(do_wring, fill)
+    function module.wring:watch(actions)
+        local capture = setmetatable({actions=actions, go=true}, wring_capture_mt)
+        return action(capture, fill, self._with)
+    end
+    function module.wring:set(actions)
+        local capture = setmetatable({actions=actions, go=false}, wring_capture_mt)
+        return action(capture, fill, self._with)
     end
 end
 
+do
+    local redo_target = {}
+    local redo_target_key = {}
 
-    --[[
-    check if selection corresponds to captured action+prev_params (w/ stored register info)
-    if so:
-        use register name specified in params, falling back to register stored at capture
-        if register name specified in params is overriding a different stored reg name:
-            start with depth = 0
-        else
-            start with stored offset
+    local redo_capture_mt = {}
+    function wring_capture_mt:__call(params)
+        local target = params[redo_target_key] or false
+        if self.go then
+            kf.execute(self.actions, params)
+        end
+        redo_target[target]={
+            actions=self.actions,
+            params=params,
+        }
+    end
 
-        let delta = max(1,params.register.offset) * (-1 if params.reverse else +1)
+    local function do_actions(params)
+        local target = redo_target[params[redo_target_key] or false]
+        if target then
+            params = vim.tbl_deep_extend("force", target.params, params)
+            kf.execute(target.actions, params)
+        end
+    end
 
-        new_reg = {name=as above, offset=starting offset + delta, align/multiple from params
-        falling back to stored}
+    module.redo = action(redo)
 
-        set prev_params.register = new_reg
-
-        if any bindings were specified with capture, apply them to action+prev_params
-        then exec action+params
-
-        arrange things so that resulting selection continues to correspond to same captured
-        action+prev params
-    else:
-        if _else (or fallback? default_to?) binding(s) were given, apply them to the action
-            nil+(current)params
-
-    --]]
-
-function wring_capture(params)
-    local capture = copy(self)
-    capture.params = params
-    local scope = kf.get_scope(params)
-    local selection = kf.get_selection(scope)
-    capture.undo_node = --TODO get undo node
-    capture.old_selection = selection.id
-
-    -- TODO explicitly fill register!
-
-    kf.execute(self.action, params)
-
-    selection = kf.get_selection(scope)
-    capture.new_selection = selection.id
-
-    wring_targets[scope.buffer] = capture
+    -- TODO allow for scoped redo
+    function module.redo:with_namespace(name)
+        if name==nil then
+            name = {}
+        end
+        return self:with(let{[redo_target_key]=name})
+    end
+    function module.redo:watch(actions)
+        local capture = setmetatable({actions=actions, go=true}, redo_capture_mt)
+        return action(capture,nil,self._with)
+    end
+    function module.redo:set(actions)
+        local capture = setmetatable({actions=actions, go=false}, redo_capture_mt)
+        return action(capture,nil,self._with)
+    end
 end
+
+return module
