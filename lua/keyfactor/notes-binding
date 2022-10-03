@@ -1,0 +1,42 @@
+is :with a method of `go` or of an action?
+    - or: is "go" just a generic action wrapper?
+
+Can we now avoid separate "bind" phase?
+    - Still need to evaluate conditionals like "on.insert.go.something(else nil)" to see
+      whether we get any action, or nil in which case we pass to next layer
+        - But we could have separate layer fallthrough mechanism. Maybe action returns something?
+
+E.g.:
+for each action-binding in the layer:
+    eval action-binding with current context
+    if returns false, break; don't go to next layer
+    if returns true, continue within this layer; don't go to next layer
+    if returns nil, continue within this layer
+
+Or:
+for each action-binding in the layer:
+    eval action-binding with current context
+    if returns truthy, flag don't go to next layer
+    in every case continue within current layer
+
+To stop execution within layer could have construct like:
+    on( go.do_something_that_might_fail ).go.do_something_else
+or maybe:
+    go.do_something_else:with{ go.do_something_that_sets_cancel_flag_if_fails }?
+
+
+-------
+
+Eval action-binding with current context:
+
+- just look at __exec, same as action. Call it, passing context.
+
+- on, when called with __exec, raises error if it is not an action binding??
+    - returns false if condition unmet and no _else
+
+- action class/wrapper does following on __exec:
+    - resolves any bindings from :with method. These have __bind metamethod taking context and
+      returning params, which gets rolled into context
+    - fills relevant parts of params with defaults?
+    - calls :exec (or other underlying callable?) with params
+    - returns true

@@ -1,6 +1,6 @@
 local utils = require("keyfactor.utils")
-local textobject = require("keyfactor.textobjects.base")
-local range = require("keyfactor.range")
+local base = require("keyfactor.textobjects.base")
+local kf = require("keyfactor.core")
 
 local function lua_to_vim_positions(line, text, offsets)
     -- 1-based byte index -> (line, 0-based utf index) tuple
@@ -12,6 +12,75 @@ local function lua_to_vim_positions(line, text, offsets)
 end
 
 local module = {}
+
+
+module.line = base.inline_textobject(function(buffer, line)
+    local text = vim.api.nvim_buf_get_lines(buffer, line, line+1, true)
+    local bounds = text:match("^()%s*().-()%s*()$")
+    -- TODO translate bounds from byte index to utf index!
+    return {kf.range(bounds)}
+end)
+
+-- TODO would be nice to have smarter word class that can include apostrophes, where appropriate
+-- (e.g., within plaintext blocks, comments, quoted strings...)
+--
+-- Note: we exclude "sequence of other (not %w_) characters separated with white space", which is
+-- included by base vim word motions
+module.word = base.inline_textobject(function(buffer, line)
+    local text = vim.api.nvim_buf_get_lines(buffer, line, line+1, true)
+    local results = {}
+    for l,r in text:gmatch("()[%w_]+()") do
+        -- TODO translate bounds from byte index to utf index!
+        results[#results+1]=kf.range{l,r}
+    end
+    return results
+end)
+
+module.WORD = base.inline_textobject(function(buffer, line)
+    local text = vim.api.nvim_buf_get_lines(buffer, line, line+1, true)
+    local results = {}
+    for l,r in text:gmatch("()[^%s]+()") do
+        -- TODO translate bounds from byte index to utf index!
+        results[#results+1]=kf.range{l,r}
+    end
+    return results
+end)
+
+do
+    local pattern_mt = {__call = function(buffer, line)
+        local text = vim.api.nvim_buf_get_lines(buffer, line, line+1, true)
+        local results = {}
+        for a,b,c,d in text:gmatch(self.pattern) do
+            -- TODO translate bounds from byte index to utf index!
+            results[#results+1]=kf.range{a,b,c,d}
+        end
+        return results
+    end}
+
+    module.char = function(x)
+        if x
+        
+    end
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 --[[
 -- Should be constructed with _pattern attribute containing lua pattern with four empty (position)

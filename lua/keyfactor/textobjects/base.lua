@@ -16,39 +16,19 @@ function module.textobject:get_next(params)
     --[[
         Params:
             buffer
-            reverse
-            side - 1 or 2
-            inner - boolean
             position
+            orientation = {side, boundary}
+            reverse
 
-        Returns next object. This is the first object whose (side, inner) position is strictly
-        beyond position (in forward direction, unless reverse is true)
+        Returns next object. This is the first object strictly
+        beyond `position` (in forward direction, unless reverse is true). Position of an object is
+        given by considering all positions of the range compatible with orientation. So if
+        orientation is fully specified, this is one position, if partially specified two, if
+        unspecified than four. 
 
         Returns nil if no such object. When there are multiple possible next objects, returns all
         of them sorted by increasing size (where size is measured first by inner, if inner is true,
         and then by outer; or vice versa if inner is false)
-
-    --]]
-    error("Not implemented")
-end
-
-function module.textobject:get_containing(params)
-    --[[
-        Params:
-            buffer
-            reverse (boolean)
-            inner (boolean)
-            [1] left bound
-            [2] right bound (default left bound)
-
-        Returns all objects containing region [1,2] (in their inner region if inner is true, else in
-        their outer region). 
-
-        Returns nil if no such object. When there are multiple possible containing objects, returns all
-        of them sorted first by increasing proximity in the forward position (unless reverse) (for inner/outer
-        boundary depending on inner param), then by increasing proximity in reverse position (...),
-        then by the same for the other boundary
-
     --]]
     error("Not implemented")
 end
@@ -58,16 +38,12 @@ function module.textobject:get_all(params)
     --[[
         Params:
             buffer
-            reverse (boolean)
-            inner (boolean)
-            linewise (boolean)
-            [1] left bound
-            [2] right bound
+            range
 
-        iterates over all objects whose (inner if inner, else outer) portion is entirely contained
-        in the region [1, 2] sorted first by increasing left side, then by increasing right side
-        (unless reverse, in which case sorted by decreasing right side, then by decreasing left
-        side)
+
+        Returns list of all objects within range (which should be just two positions, not a full
+        range). Includes objects that only partially intersect range, possibly including only the
+        endpoints of the range
     --]]
     error("Not implemented")
 end
