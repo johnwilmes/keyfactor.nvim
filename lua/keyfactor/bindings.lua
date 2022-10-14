@@ -3,15 +3,32 @@ local module = {}
 --TODO shift to utils
 function is_list_index(i,l) return (type(i)=="number" and i>0 and i<=#l and i%1==0) end
 
+local function get_bind(obj)
+    if type(obj)=="function" then
+        return obj 
+    elseif type(obj)=="table" then
+        local mt = getmetatable(obj) or {}
+        return rawget(mt, "__bind") or rawget(mt, "__call")
+    end
+end
+
+function module.is_bindable(obj)
+    return type(get_bind(obj))=="function"
+end
+
+function module.resolve(action, context)
+    return (get_bind(action))(context)
+end
+
 --[[
     start with params=params or {}
     first resolve list-like part of bindings
-        - if value is __exec'able, on __exec it should return a table containing (string) key=value
+        - if value is bindable, on resolve it should return a table containing (string) key=value
         pairs which will be extended into params
         - otherwise value must be table, and this table is treated recursively as param binding
         table
     next resolve (string) key=value part of bindings
-        - if value is __exec'able, exec it and assign value to key in params
+        - if value is bindable, resolve it and assign value to key in params
         - otherwise directly assign value to key in params
     keys of form "part1__part2" are treated as values for params.part1.part2, etc.
 
@@ -22,8 +39,8 @@ function module.resolve_params(bindings, context, params, prefix)
     params = params or {}
     prefix = prefix or ""
     for idx,value in ipairs(bindings) do
-        if module.is_executable(value) then
-            value = module.execute(value, context)
+        if module.is_bindable(value) then
+            value = module.resolve(value, context)
         end
 
         local new_prefix = "%s[%s]":format(prefix, tostring(idx))
@@ -36,8 +53,8 @@ function module.resolve_params(bindings, context, params, prefix)
     end
     for key,value in pairs(bindings) do
         if type(key)=="string" then
-            if module.is_executable(value) then
-                value = module.execute(value, context)
+            if module.is_bindable(value) then
+                value = module.resolve(value, context)
             end
             utils.table.set(params, key, value, "__")
         elseif not utils.list.is_index(key, bindings) then
@@ -49,94 +66,118 @@ function module.resolve_params(bindings, context, params, prefix)
     return params
 end
 
-do
 --[[
     first, resolve list-like part. then, resolve any key=value pairs where key appears on
     config.key
-        -if value is exec'able, exec it and append result to results
+        -if value is bindable, resolve it and append result to results
         -otherwise value should be table, recurse into it
 --]]
---
-    function resolve_action(bindings, context, result, index)
-        if module.is_executable(value) then
-            value = module.execute(value, context)
-            result[#result+1]=value
-        elseif type(value)=="table" then
-            module.resolve_actions(value, context, result, index)
-        else
-            local msg="table or executable value expected at index "..index
-            -- TODO log msg
-        end
-    end
+function module.resolve_keypress(bindings, context, result, prefix)
+    result = result or {}
+    prefix = prefix or ""
+    errors = errors or {}
 
-    function module.resolve_actions(bindings, context, result, prefix)
-        result = result or {}
-        prefix = prefix or ""
-        errors = errors or {}
+    if module.is_bindable(bindings) then
+        result[#result+1] = module.resolve(bindings, context)
+    elseif type(value=="table") then
         for idx,value in ipairs(bindings) do
             local new_prefix="%s[%s]":format(prefix, tostring(idx))
-            resolve_action(value, context, result, new_prefix)
+            module.resolve_keypress(value, context, result, new_prefix)
         end
-
         for name in context.key do
             if bindings[name]~=nil then
                 local new_prefix="%s.%s":format(prefix, name)
-                resolve_action(value, context, result, new_prefix)
+                module.resolve_keypress(value, context, result, new_prefix)
             end
         end
-        return result
+    else
+        local msg="table or bindable value expected at index "..prefix
+        -- TODO log msg
+    end
+    return result
+end
+
+local bindable_mt = {}
+function bindable_mt:with(bindings)
+    local with = self._with or {}
+    with = vim.tbl_extend("force", with, {[#with+1]=bindings})
+    local obj = vim.tbl_extend(self, {_with=with})
+    return module.bindable(self._wrapped, obj)
+end
+
+function bindable_mt:__index(key)
+    if self._index then
+        if utils.is_callable(self._index) then
+            return self:_index(key)
+        else
+            return self._index[key]
+        end
     end
 end
 
+function bindable_mt:__call(bindings)
+    return self:with(bindings)
+end
 
---[[ bind(action bindings):with{ param bindings }
-
-every __call appends action bindings
-every :with appends to param bindings
-
-on __exec, 
-    resolve param bindings (from first to last), or just use context.params if no params specified
-    then resolve everything in action bindings using params resulting from param bindings
-    return flattened list of results from action bindings, or nil if all action bindings returned
-    nil
-]]
-
-
-do
-    local bind_mt = {}
-    bind_mt.__index = bind_mt
-
-    function action_mt:__call(actions)
-        if not self._actions then
-            return setmetatable({_actions={actions}, _params=self._params}, bind_mt)
-        else
-            return self:with(actions)
-        end
+function bindable_mt:__bind(context)
+    local params
+    if self._with then
+        params = module.resolve_params(self._with, context)
+    else
+        params = context.params
     end
 
-    function action_mt:with(new_params)
-        if self._actions==nil then
-            error
-        end
-        local params = {unpack(self._params or {})} -- shallow copy self._params or {}
-        params[#params+1]=new_params
-        return setmetatable({_actions=self._actions, _params=self._params}, bind_mt)
+    if self.fill then
+        -- fill fields of params listed in fill
     end
 
-    function action_mt:__exec(context)
-        local new_context = context
-        if self._params then
-            local params = module.resolve_params(self._params, context)
-            new_context = vim.tbl_extend("force", context, {params=params})
+    return self:_wrapped(context)
+end
+
+function module.bindable(callable, obj)
+    obj = obj or {}
+    obj = {_erapped=callable,
+        _fill = obj._fill or obj.fill,
+        _with = obj._with or obj.with,
+        _index = obj._index or obj.index
+    }
+    return setmetatable(obj, bindable_mt)
+end
+
+function module.action(callable, obj)
+    local wrapped = function(binding, context)
+        callable(context.params)
+        return binding
+    end
+    return module.bindable(wrapped, obj)
+end
+
+function module.param(callable, obj)
+    local wrapped = function(binding, context)
+        return callable(context.params)
+    end
+    return module.bindable(wrapped, obj)
+end
+
+function module.capture(callable, obj)
+    return function(...)
+        local capture = {...}
+        local wrapped = function(binding, context)
+            return callable(capture, params)
         end
-        local results = module.resolve(self._actions or {}, context)
-        
+        return module.bindable(wrapped, obj)
+    end
+end
+
+function module.bind(...)
+    local actions = {...}
+    local wrapped = function(_, context)
+        local results = module.resolve_keypress(actions, context)
         if #results > 0 then
             return results
         end
     end
-
-    module.bind = setmetatable({}, bind_mt)
+    return module.bindable(wrapped, obj)
 end
 
 do
@@ -147,7 +188,7 @@ do
         return setmetatable({_index=index}, outer_mt)
     end
 
-    function outer_mt:__exec(context)
+    function outer_mt:__bind(context)
         local result = context.params
         for _,k in ipairs(self._index) do
             result = (result or {})[k]
@@ -175,15 +216,15 @@ on CONDITION [[._then] BINDING [._else BINDING]]
 
 CONDITION:
     - index into `on` object with string index unambiguously of form `mod` or `mode` or `submode`
-    - call with table or exec'able
-        - list-like part: exec'ables
+    - call with table or bindable
+        - list-like part: bindables
         - key-value part: string keys are unambiguously of form `mod`/`mode`/`subdmode`, and values
         are boolean
     - return "and" of the results
 
 BINDING:
     for every value:
-    - if exec'able, execute and return result
+    - if bindable, resolve and return result
     - if table, recurse into it, returning a table with same set of keys
     - otherwise, return value itself
 --]=]
@@ -193,8 +234,8 @@ do
             local result = true
             for k,v in pairs(table) do
                 if utils.list.is_index(k,table) then
-                    if is_executable(v) then
-                        result = result and module.execute(v, context)
+                    if is_bindable(v) then
+                        result = result and module.resolve(v, context)
                     else
                         error
                     end
@@ -228,11 +269,11 @@ do
         end
     end
 
-    local function eval(binding, exec)
-        if module.is_executable(binding) then
-            return exec(binding)
+    local function reduce(binding, eval)
+        if module.is_bindable(binding) then
+            return eval(binding)
         elseif type(binding)=="table" then
-            return utils.table.map_values(binding, exec)
+            return utils.table.map_values(binding, eval)
         else
             return binding
         end
@@ -240,14 +281,14 @@ do
 
     local on_mt = {}
 
-    function on_mt:__exec(context)
+    function on_mt:__bind(context)
         if self._condition==nil then
             error
         end
 
         local bindings
         local n
-        if module.execute(self._condition, context) then
+        if module.resolve(self._condition, context) then
             bindings = self._true or {true}
             n = self._n_true or 1
         else
@@ -256,9 +297,9 @@ do
         end
 
         local result = {}
-        local exec = function(b) return module.execute(b, context) end
+        local eval = function(b) return module.resolve(b, context) end
         for i=1,n do
-            local r = eval(bindings[i], exec)
+            local r = reduce(bindings[i], eval)
             if r ~= nil then
                 results[#results+1]=r
             end
@@ -277,7 +318,7 @@ do
             return self:_then(...)
         else
             local condition
-            if module.is_executable(...) then
+            if module.is_bindable(...) then
                 condition = {...}
             elseif type(...)=="table" then
                 condition = get_condition(...)
@@ -314,7 +355,7 @@ do
     module.on = setmetatable({}, on_mt)
 end
 
--- toggle{opt1, opt2, ..., optn, [value=execable]}
+-- toggle{opt1, opt2, ..., optn, [value=bindable]}
 --
 -- if value given, computes it
 -- otherwise, takes value to be last returned value, or optn
@@ -323,10 +364,10 @@ end
 -- otherwise returns opt1
 do
     local toggle_mt = {}
-    function toggle_mt:__exec(context)
+    function toggle_mt:__bind(context)
         local value
         if self.value then
-            value = module.execute(self.value, context)
+            value = module.resolve(self.value, context)
         else
             value = self.state or self[#self]
         end
@@ -348,44 +389,6 @@ do
     module.toggle = function(toggle)
         return setmetatable(toggle, toggle_mt)
     end
-end
-
--- CONTEXT CAPTURE
---[[
-    at declaration, grab optional binding arguments
-        - for redo, would be nice to be able to specify scope:
-        global/window/buffer/window+buffer...
-            - actually this could be specified with action.redo:new{scope=...}
-    at binding, grab context and wrap action so we can grab params at execution
-    at execution, grab params
-        - for wring, also need to get undo node/selection at this point, so we know where to go
-        when we undo
-        - wring is always scoped to buffer+selection?
-    
-    Wring *action* declaration: optional .with_fallback indexing to specify alternate set of bindings
-    Wring execution:
-        if current selection/state is valid ("corresponds" to wring capture)
-            compute new register
-            if new reg is different from current selection's then
-                undo to point of capture
-                starting from the actual action/params that were performed for that selection,
-                    apply an bindings specified with capture
-                    execute the result
-            else
-                notify somehow that no change in register is available (some kind of error
-                message?)
-        else
-            if "_else" bindings were provided with action declaration
-                apply them, starting from nil/currently passed params
-            else
-                notify somehow that wringing is invalid (some kind of error message?)
---]]
-do
-    local mt = {}
-    local module.capture = {}
-
-    module.capture.wring
-    module.capture.redo
 end
 
 -- PROMPT
@@ -425,64 +428,5 @@ end
                 then apply any bindings passed to insert at declaration,
                 then execute any resulting action
 --]]
-
--- BINDING RESOLUTION
-do
-    local function get_binding_handler(binding)
-        local b = rawget(getmetatable(binding) or {}, "__bind")
-        if (not b) and utils.is_callable(binding) then
-            b = binding
-        end
-        if (not b) and type(b)=="table" then
-            b = module.resolve
-        end
-        return b
-    end
-
-    function module.resolve(bindings, context)
-        --[[
-            context: action, params, key, mods, layers, mode, submode, (window+buffer???)
-                - mods/layers are flags tables
-                - mode/submode are strings
-            context gets filled as needed
-
-        Binding resolution:
-            First, recursively apply bindings indexed from 1 to #bindings, in order of increasing index
-            Then, if any table keys match any of the names of the keypress, recursively apply them (in
-            an unspecified order)
-
-        Applying a binding:
-            if its metatable has "__bind" then call that
-            else if it is itself callable, then call it
-            else if it is a table then apply module.resolve to it
-            else error
-        --]]
-        
-        -- TODO fill context
-        
-        if type(bindings)~="table" then
-            bindings = {bindings}
-        end
-
-        for _,binding in ipairs(bindings) do
-            local b = get_binding_handler(binding)
-            if (not b) then
-                -- TODO error
-            end
-            context.action, context.params = b(binding, context)
-        end
-
-        for key,binding in pairs(bindings) do
-            if type(key)=="string" then
-                -- TODO if key refers to context.key then
-                local b = get_binding_handler(binding)
-                if (not b) then
-                    -- TODO error
-                end
-                context.action, context.params = b(binding, context)
-            end
-        end
-    end
-end
 
 return module

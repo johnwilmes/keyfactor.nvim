@@ -1,6 +1,6 @@
 local go = require("keyfactor.action")
 
-local bind, wring, redo, set
+local bind, wring, redo, set, get, on, outer
 
 local keys = {
     seek="_",
@@ -88,8 +88,6 @@ local selection = bind{
     }, keep_orientation,
 }
 
-local seekable = redo.set{selection, namespace="seek"}
-
 --[[
 If wring is not set for this selection/undo node then
     - yank the selection and set orientation boundary via operator mods
@@ -174,7 +172,7 @@ bindings.base = {
         }:with{point_operator}
         paste=bind{
             wring.set(go.paste),
-            redo.set_only(wring.set(go.paste):with{outer, wring.register})
+            redo.set_only(wring.set(go.paste):with{outer, register=wring.register})
         }:with{point_operator, register}
 
         wring=bind(
