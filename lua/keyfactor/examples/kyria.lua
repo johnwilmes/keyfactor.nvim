@@ -1,3 +1,7 @@
+local go = require("keyfactor.action")
+
+local bind, wring, redo, set
+
 local keys = {
     seek="_",
     go="<Space>", motion="<Space>", -- both labels describe the key <Space>
@@ -12,8 +16,11 @@ local orientation = {boundary="inner", side="right"}
 
 --[[
 For each active layers, from highest to lowest index:
-    Resolve bindings
-    If action is not nil (and if "continue" flag is not set?) then break
+    Execute actions
+    If any returns truthy then break
+(Additional default layer at index 0 comes from current mode)
+(Note: can have default action that can be explicitly called if you want to skip to it from a
+higher layer...)
 
 Binding resolution:
         First, recursively apply bindings indexed from 1 to #bindings
@@ -32,55 +39,56 @@ base={
 
 --]]
 
+local one_shot = set{lock=false}
+local keep_orientation = one_shot.orientation{
+    side=get.orientation.side,
+    boundary=get.orientation.boundary,
+}
 
-local reversible = on.shift.let{reverse=true}
+local reversible = {reverse=on.shift}
+
 local operator = {
-    on.alt.let{orientation__boundary="inner"}._else.let{orientation__boundary="outer"}
-    on.control.let{linewise=true}._else.let{linewise=false},
+    linewise=on.control,
+    orientation__boundary=on.alt("inner"):_else("outer"),
 }
-local point_operator = {operator,
-    on.shift.let{orientation__side="left"}._else.extend{orientation__side="right"}
-},
 
--- TODO multiple should *toggle* register shape between larger and smaller?
---      e.g. when we have wring:watch{something, redo:set{something:with{register}}}:with{register}
---          we want redo to be able to change register shape (?), but should default to what was
---          set from register
-local register = {on.choose(--[[TODO prompt for register]]),
-    on.multiple.toggle{register__shape={"larger", "smaller"}},
+local point_operator = {
+    operator,
+    orientation__side=on.shift("left"):_else("right"),
 }
---[[ or, maybe:
-local register = function(...)
-    return {on.choose.prompt.register(...)._else(...),
-    on.multiple.extend{register={shape="large"}}}
+
+local get_shape = function(context)
+    local reg = (context.register or {}).shape
+    if reg then
+        if reg=="smaller" then
+            return "smaller"
+        end
+        return "larger"
+    end
+    local state = -- TODO get default/state shape
+    if state=="smaller" then
+        return "smaller"
+    end
+    return "larger"
 end
-]]
 
-local selection = go.select_textobject:with{
-    reversible,
-    on.control.let{augment=true},
-    on.choose.let{choose="auto"},
-    on.alt.let{partial=true},
-    on.multiple{
-        -- control(augment): whether we subselect, or just select from everything
-        on.shift.let{multiple="split"}._else.let{multiple="select"}
-    },
+local register = {
+    register__name=on.choose(prompt.register),
+    register__shape=on.multiple(toggle{"larger", "smaller", value=get_shape})
 }
-local seek = go.redo:with_namespace()
-local seekable = seek:watch{selection}
 
--- TODO when is binding for capture actually needed?
---      - e.g. for redo: in principle we might want to have point/range operators that are both
---      redo-able with the same key, but with mods doing the same thing as at the captured
---      action...
--- would it be more useful to somehow specify stuff that gets hidden from capture?
---
---  instead: seek:capture{selection}
---      and prompt.search{seek:capture{selection}}
---
---  redo:capture -- saves binding but also evaluates and then executes resulting action
---  redo:set -- just saves the binding (and the params it is called with) without executing underlying action
---
+local selection = bind{
+    go.select_textobject{
+        reversible,
+        augment=on.control,
+        choose=on.choose,
+        partial=on.alt,
+        multiple=on.multiple(on.shift("split"):_else("select")),
+        textobject=outer.textobject,
+    }, keep_orientation,
+}
+
+local seekable = redo.set{selection, namespace="seek"}
 
 --[[
 If wring is not set for this selection/undo node then
@@ -103,145 +111,129 @@ possible solutions:
 ]]
 
 
-local wring_or_yank = go.wring:with{
-    fallback={go{
-            go.yank, 
-            go.wring:set{
-                go.replace,
-                redo:set{go{go.yank, go.replace}:with{operator, register}},
-            },
-        }:with{operator, register},
-    },
-}
-
-local wring_now = go.wring:with{
-    fallback={go{
-            go.yank
-            go.wring:set{
-                go.replace,
-                redo:set{go.yank:with{operator, register}, go.replace:with{operator, register}},
-            },
-            go.wring,
-        }:with{register}
-    },
-}
-
-local scroll = go.scroll:with{reversible, on.alt.let{partial=true}, on.control.let{linewise=true}}
-local scroll = go.scroll:with{reversible, on.alt{partial=true}, on.control{linewise=true}}
+local scroll = go.scroll{reversible, partial=on.alt, linewise=on.control}
 
 local passthrough = {
-    -- TODO
+    one_shot.mod{
+        shift=on.shift,
+        alt=on.alt,
+        ctrl=on.ctrl,
+        choose=on.choose,
+        multiple=on.multiple,
+    },
+    one_shot.layer{
+        motions=on{layer="motions"},
+        actions=on{layer="actions"},
+        settings=on{layer="settings"},
+    },
+    keep_orientation,
+    one_shot.params{
+        count=get.params.count,
+    },
 }
 
 local bindings = {}
 bindings.base = {
     on.insert{
-        on{edit=false}.go{
-            tab=go.complete_next:with{reversible},
+        on{edit=false}:_then{
+            -- TODO this stuff could be implemented instead with mode default layer
+            tab=go.complete_next{reversible},
             enter=go.complete_default,
         }
-        scroll={on.control{scroll}, on.alt{scroll}},
+        -- TODO might be nice to have non-printable scroll key (on combo?) so that we can do the
+        -- same regardless of mode
+        scroll={on.control(scroll), on.alt(scroll)},
     },
     on.normal{
-        -- TODO... actions.set
-        go=go.set.layer{motion=true}:with{passthrough},
-        do=go.set.layer{action=true}:with{passthrough},
-        settings=go.set.layer{settings=true:with{passthrough},
-        choose=go.set.mod{choose=true}:with{passthrough},
-        multiple=go.set.mod{multiple=true}:with{passthrough},
+        go={one_shot.layer{motions=true}, passthrough},
+        do={one_shot.layer{actions=true}, passthrough},
+        settings={one_shot.layer{settings=true}, passthrough},
+        choose={one_shot.mods{choose=true}, passthrough},
+        multiple={one_shot.mods{multiple=true}, passthrough},
 
         scroll=scroll,
 
         line=selection:with{textobject=textobjects.line},
         word=selection:with{textobject=textobjects.word},
-        search=prompt.search{seekable}, -- TODO instead prompt.search?
-        --[[ prompt.search(seekable) ]]
-        char=prompt.char{seekable},
         -- individual ranges from current mark:
-        mark=selection:with{textobject=textobjects.mark},
-        seek=go(seek),
+        --mark=selection{textobject=textobjects.mark:with{name=get.local("default_mark")}},
+        char=redo.set{selection,
+            set{lock=true}.highlight{search=true},
+            namespace="seek",
+        }:with{textobject=textobjects.char}, 
+        search=redo.set{selection,
+            set{lock=true}.highlight{search=true},
+            namespace="seek",
+        }:with{textobject=textobjects.search}, 
+        seek=redo{namespace="seek"},
 
+        delete=go.delete{operator, register},
+        insert=bind{
+            go.insert,
+            redo.set_only(go.paste{register__name="insert", outer})
+        }:with{point_operator}
+        paste=bind{
+            wring.set(go.paste),
+            redo.set_only(wring.set(go.paste):with{outer, wring.register})
+        }:with{point_operator, register}
 
-        delete=go.delete:with{operator, register},
-        insert={go.insert:with{point_operator},
-            -- TODO probably should be wringable-ish
-            -- TODO is reinsert actually different from paste with register.name="insert"?
-            redo:set{go.reinsert, point_operator},
-        },
-        --[[ binding from redo:set gets called everytime we wring the paste, with updated
-                register params, so redoing by default does what the paste ended up as
-
-             point_operator (and register) bindings are made available to redo and to paste, but
-             not to wring.
-             (although the actual wring action will again have register bindings available)
-        ]]
-        paste={
-            wring:watch{
-                go.paste, redo:set{go.paste, point_operator, register},
-            }:with{
-                point_operator, register,
-            }
-        },
-        wring=wring:with{increment="depth", reversible, register}
+        wring=bind(
+            on(wring.is_active):_then(
+                wring{increment="depth", reversible, outer}
+            ):_else(
+                wring.set{on(wring.is_active):_then(go.replace):_else(go.yank)}:with{outer, operator}
+            )):with{register}
         -- TODO "choose" mod but for undo
-        undo={go.undo, reversible},
-        enter={go.redo},
+        undo=go.undo{reversible},
+        enter=redo,
 
         surround={},
         comment={},
         indent={},
 
-        -- TODO tab rotates focus of selection
-        --      shift goes in reverse direction
-        --      alt moves to top/bottom
-        --      control rotates *contents* of selection, and if selection is from register it does
-        --          this by changing alignment of selection (via wring)
-        tab=on.control{
-            wring_now:with{increment="align",
-                on.alt{
-                    on.shift.toggle{
-                        register__align={"bottom", "focus", "top"}
-                    }._else.toggle{
-                        register__align={"top", "focus", "bottom"}
-                    }
-                }._else{reversible}
-            },
-        }._else{
-            go.rotate_focus:with{
-                on.alt{
-                    on.shift.toggle{
-                        align={"bottom", "alternate", "top"}
-                    }._else.toggle{
-                        align={"top", "alternate", "bottom"}
-                    }
-                }._else{reversible},
-            },
-        },
+        tab=on.control(
+            on(wring.is_active):_then(
+                wring{increment="offset", reversible}
+            ):_else(
+                wring.set{on(wring.is_active):_then(go.replace):_else(go.yank)}:with{operator}
+            )
+        ):_else(go.rotate_focus{reversible, jump=on.alt}),
     },
 }
 
 bindings.motions = {
     on.normal{
-        do=go.round_selection:with{
-            on.control{
+        do={keep_orientation, go.round_selection{
+            on.control(
                 -- round to inner/outer/left/right
                 -- TODO should linewise rounding be possible?
-                on.shift{
-                    on.alt.let{boundary="inner"}._else.let{side="left"}
-                }._else{
-                    on.alt.let{side="right"}._else.let{boundary="outer"}
-                },
-            }._else{
+                on.shift(
+                    on.alt{boundary="inner"}:_else{side="left"}
+                ):_else(
+                    on.alt{side="right"}:_else{boundary="outer"}
+                ),
+            ):_else(
                 -- round to a specific position
-                on.shift.let{side="left"}._else.let{side="right"},
-                on.alt.let{boundary="inner"}._else.let{boundary="outer"},
-            }
-        },
-        surround=prompt.surround(seekable), -- TODO shim to transform surround prompt to textobject?
+                on.shift{side="left"}:_else{side="right"},
+                on.alt{boundary="inner"}:_else{boundary="outer"},
+            )
+        }},
+        --[[ TODO line: if count is given, select specific line by number
+        --      (from bottom, if shift/reverse)
+        --  if line not given, select via prompt
+        --
+        --  ctrl/augment and alt/partial should work as usual-ish?
+        --
+        line=go.select_line ]]
+
+        --[[
+        surround=seekable:with{textobject=textobjects.surround},
         comment=seekable:with{textobject=textobjects.comment},
         indent=seekable:with{textobject=textobjects.indent},
-        mark={--[[TODO like base-layer mark, but prompt for mark instead of using default]]}
-        -- TODO tab = go to focus
+        mark=seekable:with{textobject=textobjects.mark}
+        tab=go.view_focus{on.alt{center=false}:_else{center=true}},
+        ]]
+
         -- TODO enter = "add new range to selection, immediately following focus, constructed the
         --              same way as the focus" ???!!
     },
@@ -249,16 +241,53 @@ bindings.motions = {
 
 bindings.actions = {
     on.normal{
-        char=go.capitalize:with{reversible, operator},
-        line=go.join:with{reversible, operator},
-        mark={--[[set/add current selection to given mark]]},
+        --[[
+        char=go.capitalize{reversible, operator},
+        line=go.join{reversible, operator},
+        mark=go.mark_selection:with{
+            -- modify existing mark vs replace existing mark
+            -- take only focus of selection vs take entire selection
+            --
+            -- if modifying, additional choices:
+            --      add ranges to mark:
+            --          - on overlap: take both, replace, or keep old
+            --      remove ranges from mark:
+            --          - any overlaps, or only identical?
+            --      or some kind of symmetric difference, I guess..
+
+            -- shift: remove any overlap
+            -- multiple: use all ranges of selection. otherwise only use focus
+            -- choose: choose mark name instead of using default
+            -- ctrl or alt: modify mark; otherwise, replace. also implied by shift
+
+            on_overlap="replace", -- could be "replace", "add", or "ignore", or I guess "merge"
+            on{ctrl=false,alt=false,shift=false}.let{augment=true}:_else{augment=false},
+            on.shift{remove=true},
+            on{multiple=false}.let{only_focus=true},
+            on.choose{name=prompt.mark},
+        },
+        ]]
     },
 }
 
--- TODO change orientation... oneshot vs lock... until non-motion action?
--- TODO change highlighting... until next highlighting action?
+-- TODO reset orientation (and clear lock) immediately prior to any non-motion action, effective
+--          immediately
+-- TODO set highlight=true when we search
+
+local lock = set{lock=true, scope=on.ctrl{"buffer", "window"}}
+
+local set_register=lock.register{name=prompt.register}
+local set_highlight=lock.highlight{search=toggle{true,false,value=get.highlight.search}}
 bindings.settings = {
     on.normal{
-        mark={--[[TODO prompt for mark, and set that one as the default]]},
+        mark=set.local{default_mark=prompt.mark},
+        paste=set_register,
+        wring=set_register,
+        do=one_shot.orientation{
+            on.shift{side="left"}:_else{side="right"},
+            on.alt{boundary="inner"}:_else{boundary="outer"},
+        },
+        search=set_highlight,
+        char=set_highlight,
     }
 }

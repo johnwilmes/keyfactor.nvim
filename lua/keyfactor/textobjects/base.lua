@@ -238,6 +238,9 @@ end
 --
 --   The regular expression should have four captures, starting at the positions of each 
 --   of left outer, left inner, right inner, and right outer points
+--
+--   TODO actually it would be more pleasant to have a single inner capture and a single outer
+--   capture...
 --]]
 function module.regex_textobject(regex)
     local function raw_next(params)

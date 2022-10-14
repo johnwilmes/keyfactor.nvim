@@ -28,3 +28,54 @@ end)
 module.word = base.pattern_textobject("()()[%w_]+()()")
 
 module.WORD = base.pattern_textobject("()()[^%s]+()()")
+
+
+do
+    function get_char_textobject(char)
+        --TODO presumably also set history?
+        --highlighting?
+        local pattern
+        if char:match("^%p") then
+            pattern = "()()%"..char.."()()"
+        else
+            pattern="()()"..char.."()()"
+        end
+        return base.pattern_textobject(pattern)
+    end
+
+    module.char = bindable(function(params)
+        if type(params.char)=="string" then
+            return get_char_textobject(params.char)
+        end
+
+        local char = prompt.char()
+        if char then
+            return get_char_textobject(char)
+        end
+
+        return nil
+    end)
+end
+
+do
+    function get_search_textobject(pattern)
+        --TODO presumably also set history?
+        --highlighting?
+        pattern = "()()"..pattern.."()()"
+        local regex=require("rex_pcre2").new(pattern)
+        return base.pattern_textobject(pattern)
+    end
+
+    module.search = bindable(function(params)
+        if type(params.pattern)=="string" then
+            return get_search_textobject(params.pattern)
+        end
+
+        local pattern = prompt.search()
+        if pattern then
+            return get_search_textobject(pattern)
+        end
+
+        return nil
+    end)
+end

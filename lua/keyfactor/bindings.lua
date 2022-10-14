@@ -1,412 +1,352 @@
 local module = {}
 
+--TODO shift to utils
+function is_list_index(i,l) return (type(i)=="number" and i>0 and i<=#l and i%1==0) end
+
 --[[
+    start with params=params or {}
+    first resolve list-like part of bindings
+        - if value is __exec'able, on __exec it should return a table containing (string) key=value
+        pairs which will be extended into params
+        - otherwise value must be table, and this table is treated recursively as param binding
+        table
+    next resolve (string) key=value part of bindings
+        - if value is __exec'able, exec it and assign value to key in params
+        - otherwise directly assign value to key in params
+    keys of form "part1__part2" are treated as values for params.part1.part2, etc.
 
-on CONDITION [.bind]  BINDING [._else BINDING]
+    return params, errors where errors is nil if all indices/values conformed to above description,
+    or a list of error messages otherwise
+]]
+function module.resolve_params(bindings, context, params, prefix)
+    params = params or {}
+    prefix = prefix or ""
+    for idx,value in ipairs(bindings) do
+        if module.is_executable(value) then
+            value = module.execute(value, context)
+        end
 
-CONDITION: index into `on` object
-    - string index: unambiguously of form `mod` or `mode` or `submode`,
-        or the same prefixed with either "no_" or "not_"
-    - un-callable table index: (key, value) entries can be:
-        (number, string): string is interpreted same as string index
-        (string, bool): string is interpreted as string index (but prefix no/not disallowed)
-        ("mode", "insert" or "normal" or {insert=true} or {normal=true})
-        ("mods", table of entries of form {modname=bool})
-        ("submode", submode name or table of entries of form {submode=bool})
-    - callable table or function index: gets called with same "context" as resolve, and must return
-        true/false
+        local new_prefix = "%s[%s]":format(prefix, tostring(idx))
+        if type(value)~="table" then
+            local msg="table value expected at index "..new_prefix
+            -- TODO log msg
+        else
+            module.resolve_params(value, context, params, new_prefix)
+        end
+    end
+    for key,value in pairs(bindings) do
+        if type(key)=="string" then
+            if module.is_executable(value) then
+                value = module.execute(value, context)
+            end
+            utils.table.set(params, key, value, "__")
+        elseif not utils.list.is_index(key, bindings) then
+            local new_prefix = "%s[%s]":format(prefix, tostring(key))
+            local msg="invalid index "..new_prefix
+            -- TODO log msg
+        end
+    end
+    return params
+end
 
-BINDING:
-    - index with string: treat as name of "known" binding (i.e. element of this module, other than
-    "on"?); subsequent calling or indexing (other than "_else/Else") gets passed to this binding
-    - call: parameters should be bindings or tables of bindings
-
-    -- TODO have an interface for registering "known" bindings
-    
-    -- TODO optional ".bind" keyword after condition
---]]
 do
-    local conditional_mt = {}
-    function conditional_mt:__call(context)
-        if self.mode then
-            if self.mode~=context.mode then
-                return false
-            end
-        end
-
-        if self.submode_forbidden and self.submode_forbidden[context.submode] then
-            return false
-        end
-
-        if self.submode_allowed and not self.submode_allowed[context.submode] then
-            return false
-        end
-
-        for m,v in pairs(self.mods) do
-            if utils.xor(v, context.mods[m]) then
-                return false
-            end
-        end
-
-        return true
-    end
-    
-    local function parse_negation(s)
-        local negate = s:match("^not?_(.+)")
-        s = negate or s
-        if s=="insert" or s=="normal" then
-            if negate then
-                if s=="insert" then
-                    s="normal"
-                else
-                    s="insert"
-                end
-                negate = false
-            end
-        return (not negate), s
-    end
-
-    local function string_to_table(s, enable)
-        if enable==nil then
-            enable, s = parse_negation(s)
-        end
-        if s=="insert" or s=="normal" then
-            return {mode=s}
-        end
-        if is_mod(s) then
-            if is_submode(s) then
-                -- TODO error ambiguous
-            end
-            return {mods={[s]=enable}}
-        elseif is_submode(s) then
-            if enable then
-                return {submode_allowed={[s]=true}}
-            else
-                return {submode_forbidden={[s]=true}}
-            end
+--[[
+    first, resolve list-like part. then, resolve any key=value pairs where key appears on
+    config.key
+        -if value is exec'able, exec it and append result to results
+        -otherwise value should be table, recurse into it
+--]]
+--
+    function resolve_action(bindings, context, result, index)
+        if module.is_executable(value) then
+            value = module.execute(value, context)
+            result[#result+1]=value
+        elseif type(value)=="table" then
+            module.resolve_actions(value, context, result, index)
         else
-            -- TODO unrecognized
+            local msg="table or executable value expected at index "..index
+            -- TODO log msg
         end
     end
 
-    local function get_conditional(desc)
-        local conditional
-        if type(desc)=="string" then
-            conditional = string_to_table(desc)
-        elseif type(desc)=="table" then
-            conditional = {}
-            for key,value in pairs(desc) do
-                if type(key)=="number" and type(value)=="string" then
-                    conditional = vim.tbl_deep_extend("force", conditional, string_to_table(value))
-                elseif type(key)=="string" and type(value)=="bool" then
-                    conditional = vim.tbl_deep_extend("force", conditional, string_to_table(key, value))
-                elseif key=="mods" then
-                    conditional.mods = conditional.mods or {}
-                    for k,v in pairs(mods) do
-                        if type(k)=="string" then
-                            conditional.mods[k] = not (not v)
-                        elseif type(v)=="string" then
-                            local enable, mod = parse_negation(v)
-                            conditional.mods[mod]=enable
-                        end
-                    end
-                elseif key=="submode" then
-                    if type(value)=="string" then
-                        local enable, submode = parse_negation(value)
-                        local d = "submode"..((enable and "_allowed") or "_forbidden")
-                        d = utils.table.set_default(conditional, d)
-                        d[value] = true
-                    elseif type(value)=="table" then
-                        for submode, allowed in pairs(value) do
-                            local d = "submode"..((allowed and "_allowed") or "_forbidden")
-                            d = utils.table.set_default(conditional, d)
-                            d[submode] = true
-                        end
-                    end
-                elseif key=="mode" then
-                    if value=="insert" or value=="normal" then
-                        conditional.mode=value
-                    else
-                        --TODO error
-                    end
-                end
-            end
-        end
-        return setmetatable(conditional, conditional_mt)
-    end
-
-    local mt = {}
-
-    local function new(old)
-        old = old or {}
-        local obj = old[old] or {}
-        obj = {--shallow copy of used fields
-            condition=obj.condition,
-            on_true=obj.on_true,
-            on_false=obj.on_false,
-            unresolved=obj.unresolved
-        }
-
-        local new = {}
-        new[new] = obj -- stored here to avoid index conflicts
-
-        return setmetatable(new, mt)
-    end
-
-    function mt:__bind(context)
-        local obj = self[self]
-        if obj.condition==nil then
-            -- TODO error
-        elseif obj.on_true==nil and not obj.unresolved then
-            -- TODO error
-        elseif obj.on_false==false and not obj.unresolved then
-            -- TODO error
+    function module.resolve_actions(bindings, context, result, prefix)
+        result = result or {}
+        prefix = prefix or ""
+        errors = errors or {}
+        for idx,value in ipairs(bindings) do
+            local new_prefix="%s[%s]":format(prefix, tostring(idx))
+            resolve_action(value, context, result, new_prefix)
         end
 
-        if obj.condition(context) then
-            if obj.on_true==nil then
-                return module.resolve(obj.unresolved, context)
+        for name in context.key do
+            if bindings[name]~=nil then
+                local new_prefix="%s.%s":format(prefix, name)
+                resolve_action(value, context, result, new_prefix)
             end
-            return module.resolve(obj.on_true, context)
-        elseif obj.on_false~=nil then
-            if obj.on_false==false then
-                return module.resolve(obj.unresolved, context)
-            end
-            return module.resolve(obj.on_false, context)
-        else
-            return context.action, context.params
         end
-    end
-
-    function mt:__index(key)
-        local result = new(self) -- avoid side effects, don't modify self
-        local obj = result[result] -- stored here to avoid index conflicts
-
-        if obj.condition==nil then
-            -- key represents CONDITION
-            if utils.is_callable(key) then
-                obj.condition = key
-            else
-                obj.condition = get_conditional(key)
-            end
-        elseif obj.unresolved then
-            if key=="_else" or key=="Else" then
-                if obj.on_true~=nil then
-                    -- TODO error
-                end
-                obj.on_true = obj.unresolved
-                obj.on_false = false
-                obj.unresolved = nil
-            else
-                obj.unresolved=obj.unresolved[key]
-                if not obj.unresolved then
-                    -- TODO error?
-                end
-            end
-        elseif obj.on_true==nil then
-            -- key represents name of known binding; set unresolved
-            if key=="on" or not module[key] then
-                --TODO error
-            end
-            obj.unresolved = module[key]
-        elseif obj.on_false==nil then
-            -- awaiting "else"
-            if key~="_else" and key~="Else" then
-                --TODO error
-            end
-            obj.on_false = false
-        elseif obj.on_false==false then
-            -- key represents name of known binding; set unresolved
-            if key=="on" or not module[key] then
-                --TODO error
-            end
-            obj.unresolved = module[key]
-        else
-            -- TODO error
-        end
-
         return result
     end
-
-    function mt:__call(...)
-        local result = new(self) -- avoid side effects, don't modify self
-        local obj = result[result] -- stored here to avoid index conflicts
-
-        if obj.condition==nil then
-            --TODO error, CONDITION must be provided as index
-        elseif obj.unresolved then
-            obj.unresolved = obj.unresolved(...)
-        elseif obj.on_true==nil then
-            obj.on_true = {...}
-        elseif obj.on_false==false then
-            obj.on_false = {...}
-        else
-            -- TODO error
-        end
-
-        return result
-    end
-
-    module.on = new()
 end
 
 
---[[
+--[[ bind(action bindings):with{ param bindings }
 
-(only/first/last) ACTION [ACTION STUFF] .bind(BINDINGS)
+every __call appends action bindings
+every :with appends to param bindings
 
-ACTION
-    - index with string name of "known" action
-    - call with action object (or callable??)
-
-.bind(BINDINGS)
-    -optionally: specify one or more bindings/binding tables
-
-result of binding: returns (wrapper, existing params)
-    - wrapper tracks (existing action), ACTION, PARAMS, and BINDINGS
-
-execution of wrapper with (call params):
-    - let (new params) = PARAMS or (call params)
-    - let (a, p) = resolve(BINDINGS or {}, ACTION, (new params))
-        -- TODO remaining context for bindings, like mods/mode?
-            - presumably derived at execution time, since getting "mode" right seems important...
-    - call (existing action) with (call params) and call (a, p), as appropriate, in the appropriate
-    order, as determined by whether existing action is non-nil and whether this is only/first/last
-
--- TODO replace ".with" with ".bind"
--- send calls prior to .bind to (unresolved) action
-
+on __exec, 
+    resolve param bindings (from first to last), or just use context.params if no params specified
+    then resolve everything in action bindings using params resulting from param bindings
+    return flattened list of results from action bindings, or nil if all action bindings returned
+    nil
 ]]
 
+
 do
-    local mt = {}
+    local bind_mt = {}
+    bind_mt.__index = bind_mt
 
-    local function new(old)
-        local obj
-        if type(old)=="string" then
-            obj = {name=old}
+    function action_mt:__call(actions)
+        if not self._actions then
+            return setmetatable({_actions={actions}, _params=self._params}, bind_mt)
         else
-            old = old[old]
-            obj = {--shallow copy of used fields
-                name=old.name
-                action=old.action,
-                unresolved=old.unresolved,
-                params=old.params,
-                bindings=old.bindings
-            }
+            return self:with(actions)
         end
-
-        local new = {}
-        new[new] = obj -- stored here to avoid index conflicts
-
-        return setmetatable(new, mt)
     end
 
-    function mt:__index(key)
-        local result = new(self) -- avoid side effects, don't modify self
-        local obj = result[result] -- stored here to avoid index conflicts
-
-        if key=="with" then
-            if obj.bindings~=nil then
-                -- TODO error
-            end
-            if obj.unresolved then
-                obj.action = obj.unresolved
-                obj.unresolved = nil
-            elseif not obj.action then
-                --TODO error
-            end
-            obj.bindings = false
-        elseif obj.unresolved then
-            obj.unresolved=obj.unresolved[key]
-        elseif obj.action==nil then
-            --TODO lookup action
+    function action_mt:with(new_params)
+        if self._actions==nil then
+            error
         end
+        local params = {unpack(self._params or {})} -- shallow copy self._params or {}
+        params[#params+1]=new_params
+        return setmetatable({_actions=self._actions, _params=self._params}, bind_mt)
+    end
 
+    function action_mt:__exec(context)
+        local new_context = context
+        if self._params then
+            local params = module.resolve_params(self._params, context)
+            new_context = vim.tbl_extend("force", context, {params=params})
+        end
+        local results = module.resolve(self._actions or {}, context)
+        
+        if #results > 0 then
+            return results
+        end
+    end
+
+    module.bind = setmetatable({}, bind_mt)
+end
+
+do
+    local outer_mt = {}
+
+    function outer_mt:__index(k)
+        local index = utils.list.concatenate(self._index, {k})
+        return setmetatable({_index=index}, outer_mt)
+    end
+
+    function outer_mt:__exec(context)
+        local result = context.params
+        for _,k in ipairs(self._index) do
+            result = (result or {})[k]
+        end
         return result
     end
 
-    function mt:__call(...)
-        local result = new(self) -- avoid side effects, don't modify self
-        local obj = result[result] -- stored here to avoid index conflicts
-        if obj.action==nil then
-            if obj.unresolved~=nil then
-                --TODO error
+    module.outer = setmetatable({_index={}}, outer_mt)
+end
+
+--[=[
+
+on CONDITION [[._then] BINDING [._else BINDING]]
+    -- on[{(condition)}]
+    -- on[{(condition)}](thing1) or on[{(condition)}]._then(thing1)
+    -- on[{(condition)}]._else(thing2)
+    -- on[{(condition)}](thing1)._else(thing2) or on[{(condition)}]._then(thing1)._else(thing2)
+
+    -resolves condition (passed as either index or call, different formats)
+    -if condition is truthy then resolves thing1 and returns whatever it resolves to; defaults to
+    returning `true` if no thing1
+    -if condition is falsy, then resolves thing2 and returns whatever it resolves to; defaults to
+    returning `nil` if no _else; (if _else given then thing2 must be given, or resolving is an
+    error)
+
+CONDITION:
+    - index into `on` object with string index unambiguously of form `mod` or `mode` or `submode`
+    - call with table or exec'able
+        - list-like part: exec'ables
+        - key-value part: string keys are unambiguously of form `mod`/`mode`/`subdmode`, and values
+        are boolean
+    - return "and" of the results
+
+BINDING:
+    for every value:
+    - if exec'able, execute and return result
+    - if table, recurse into it, returning a table with same set of keys
+    - otherwise, return value itself
+--]=]
+do
+    local function get_condition(tbl)
+        return function(context)
+            local result = true
+            for k,v in pairs(table) do
+                if utils.list.is_index(k,table) then
+                    if is_executable(v) then
+                        result = result and module.execute(v, context)
+                    else
+                        error
+                    end
+                elseif type(k)=="string" then
+                    if k=="mode" then
+                        if v=="insert" or v=="normal" then
+                            ...
+                        else
+                            error
+                        end
+                    elseif k=="submode" then
+                        if type(v)=="table" then
+                            -- TODO check context.submode belongs to v
+                        elseif type(v)=="string" then
+                            -- TODO check submode==v
+                        else
+                            error
+                        end
+                    elseif k=="mods" then
+                        -- TODO
+                    elseif k =="layer" then
+                        -- TODO
+                    else
+                        -- TODO check if unambiguously mode, submode, mod, or layer
+                    end
+                else
+                    error
+                end
             end
-            obj.action = ...
-        elseif obj.bindings==nil then
-            if obj.params~=nil then
-                --TODO error
-            end
-            obj.params = ...
-        elseif obj.bindings==false then
-            obj.bindings = {...}
+            return result
+        end
+    end
+
+    local function eval(binding, exec)
+        if module.is_executable(binding) then
+            return exec(binding)
+        elseif type(binding)=="table" then
+            return utils.table.map_values(binding, exec)
         else
-            --TODO error
-        end
-
-        return result
-    end
-
-    function mt:__bind(context)
-        local result = new(self)
-        local obj = result[result]
-        obj.replaced_action = context.action
-
-        return result, context.params
-    end
-
-    function mt:__exec(params)
-        local obj = self[self]
-        local my_params = obj.params or params
-        local action = obj.action
-        if obj.bindings then
-            local context = {action=action, params=my_params}
-            action, my_params = module.resolve(obj.bindings, context)
-        end
-        if obj.name=="last" and obj.replaced_action then
-            kf.exec(obj.replaced_action, params)
-        end
-        kf.exec(action, my_params)
-        if obj.name=="first" and obj.replaced_action then
-            kf.exec(obj.replaced_action, params)
+            return binding
         end
     end
 
-    module.only = new("only")
-    module.first = new("first")
-    module.last = new("last")
+    local on_mt = {}
+
+    function on_mt:__exec(context)
+        if self._condition==nil then
+            error
+        end
+
+        local bindings
+        local n
+        if module.execute(self._condition, context) then
+            bindings = self._true or {true}
+            n = self._n_true or 1
+        else
+            bindings = self._false or {}
+            n = self._n_false or 0
+        end
+
+        local result = {}
+        local exec = function(b) return module.execute(b, context) end
+        for i=1,n do
+            local r = eval(bindings[i], exec)
+            if r ~= nil then
+                results[#results+1]=r
+            end
+        end
+        return unpack(result)
+    end
+
+    function on_mt:__index(key)
+        return self{[key]=true}
+    end
+
+    function on_mt:__call(...)
+        if self._true or self._false then
+            error
+        elseif self._condition then
+            return self:_then(...)
+        else
+            local condition
+            if module.is_executable(...) then
+                condition = {...}
+            elseif type(...)=="table" then
+                condition = get_condition(...)
+            else
+                error
+            end
+            return setmetatable({_condition=condition}, on_mt)
+        end
+    end
+
+    function on_mt:_then(...)
+        if self._condition==nil or self._true or self._false then
+            error
+        end
+        local obj = {_condition=self.condition,
+                     _true={...},
+                     _n_true=select("#",...)}
+        
+        return setmetatable(obj, on_mt)
+    end
+
+    function on_mt:_else(...)
+        if self._condition==nil or self._false then
+            error
+        end
+        local obj = {_condition=self.condition,
+                     _true=self._true,
+                     _n_true=self._n_true,
+                     _false={...},
+                     _n_false=select("#",...)}
+        return setmetatable(obj, on_mt)
+    end
+
+    module.on = setmetatable({}, on_mt)
 end
 
--- PARAM MANIPULATION
+-- toggle{opt1, opt2, ..., optn, [value=execable]}
+--
+-- if value given, computes it
+-- otherwise, takes value to be last returned value, or optn
+--
+-- if value==opti, returns opt(i+1)%n
+-- otherwise returns opt1
 do
-    local mt = {}
-    function mt:__bind(context)
-        return context.action, vim.tbl_extend("force", context.params or {}, self.params)
+    local toggle_mt = {}
+    function toggle_mt:__exec(context)
+        local value
+        if self.value then
+            value = module.execute(self.value, context)
+        else
+            value = self.state or self[#self]
+        end
+        local index=1
+        for i,x in ipairs(self) do
+            if vim.deep_equal(x, value) then
+                index=(i%#self)+1
+                break
+            end
+        end
+
+        value=self[index]
+        if not self.value then
+            self.state=value
+        end
+        return value
     end
 
-    module.let = function(params)
-        return setmetatable({params=params}, mt)
-    end
-end
-do
-    local mt = {}
-    function mt:__bind(context)
-        return context.action, vim.tbl_deep_extend("force", context.params or {}, self.params)
-    end
-
-    module.extend = function(params)
-        return setmetatable({params=params}, mt)
-    end
-end
-do
-    local mt = {}
-    function mt:__bind(context)
-        return context.action, self.params
-    end
-
-    module.let_only = function(params)
-        return setmetatable({params=params}, mt)
+    module.toggle = function(toggle)
+        return setmetatable(toggle, toggle_mt)
     end
 end
 
