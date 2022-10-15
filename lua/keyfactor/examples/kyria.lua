@@ -40,14 +40,11 @@ base={
 --]]
 
 local one_shot = set{lock=false}
-local keep_orientation = one_shot.orientation{
-    side=get.orientation.side,
-    boundary=get.orientation.boundary,
-}
 
 local reversible = {reverse=on.shift}
 
 local operator = {
+    unset.orientation,
     linewise=on.control,
     orientation__boundary=on.alt("inner"):_else("outer"),
 }
@@ -77,15 +74,13 @@ local register = {
     register__shape=on.multiple(toggle{"larger", "smaller", value=get_shape})
 }
 
-local selection = bind{
-    go.select_textobject{
-        reversible,
-        augment=on.control,
-        choose=on.choose,
-        partial=on.alt,
-        multiple=on.multiple(on.shift("split"):_else("select")),
-        textobject=outer.textobject,
-    }, keep_orientation,
+local selection = go.select_textobject{
+    reversible,
+    augment=on.control,
+    choose=on.choose,
+    partial=on.alt,
+    multiple=on.multiple(on.shift("split"):_else("select")),
+    textobject=outer.textobject,
 }
 
 --[[
@@ -124,7 +119,6 @@ local passthrough = {
         actions=on{layer="actions"},
         settings=on{layer="settings"},
     },
-    keep_orientation,
     one_shot.params{
         count=get.params.count,
     },
@@ -132,17 +126,17 @@ local passthrough = {
 
 local bindings = {}
 bindings.base = {
-    on.insert{
-        on{edit=false}:_then{
+    on.insert(bind{
+        on{edit=false}(bind{
             -- TODO this stuff could be implemented instead with mode default layer
             tab=go.complete_next{reversible},
             enter=go.complete_default,
-        }
+        })
         -- TODO might be nice to have non-printable scroll key (on combo?) so that we can do the
         -- same regardless of mode
         scroll={on.control(scroll), on.alt(scroll)},
-    },
-    on.normal{
+    }),
+    on.normal(bind{
         go={one_shot.layer{motions=true}, passthrough},
         do={one_shot.layer{actions=true}, passthrough},
         settings={one_shot.layer{settings=true}, passthrough},
@@ -196,12 +190,12 @@ bindings.base = {
                 wring.set{on(wring.is_active):_then(go.replace):_else(go.yank)}:with{operator}
             )
         ):_else(go.rotate_focus{reversible, jump=on.alt}),
-    },
+    }),
 }
 
 bindings.motions = {
-    on.normal{
-        do={keep_orientation, go.round_selection{
+    on.normal(bind{
+        do=go.round_selection{
             on.control(
                 -- round to inner/outer/left/right
                 -- TODO should linewise rounding be possible?
@@ -215,7 +209,7 @@ bindings.motions = {
                 on.shift{side="left"}:_else{side="right"},
                 on.alt{boundary="inner"}:_else{boundary="outer"},
             )
-        }},
+        },
         --[[ TODO line: if count is given, select specific line by number
         --      (from bottom, if shift/reverse)
         --  if line not given, select via prompt
@@ -234,7 +228,7 @@ bindings.motions = {
 
         -- TODO enter = "add new range to selection, immediately following focus, constructed the
         --              same way as the focus" ???!!
-    },
+    }),
 }
 
 bindings.actions = {
@@ -268,24 +262,20 @@ bindings.actions = {
     },
 }
 
--- TODO reset orientation (and clear lock) immediately prior to any non-motion action, effective
---          immediately
--- TODO set highlight=true when we search
-
 local lock = set{lock=true, scope=on.ctrl{"buffer", "window"}}
 
 local set_register=lock.register{name=prompt.register}
 local set_highlight=lock.highlight{search=toggle{true,false,value=get.highlight.search}}
 bindings.settings = {
-    on.normal{
+    on.normal(bind{
         mark=set.local{default_mark=prompt.mark},
         paste=set_register,
         wring=set_register,
-        do=one_shot.orientation{
-            on.shift{side="left"}:_else{side="right"},
-            on.alt{boundary="inner"}:_else{boundary="outer"},
+        do=lock.orientation{
+            side=on.shift("left"):_else("right"),
+            boundary=on.alt("inner"):_else("outer"),
         },
         search=set_highlight,
         char=set_highlight,
-    }
+    })
 }
