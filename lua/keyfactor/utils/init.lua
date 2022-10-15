@@ -3,6 +3,32 @@ local utils = {}
 local CTRL_V = "\22"
 local CTRL_S = "\19"
 
+function utils.lazy_require(module)
+    local loaded
+    local mt = {}
+    function mt:__index(_, k)
+        loaded = loaded or require(module)
+        mt.__index = function(_,k) return loaded[k] end
+        return loaded[k]
+    end
+    function mt:__newindex(_, k, v)
+        loaded = loaded or require(module)
+        mt.__newindex = function(_,k,v) loaded[k]=v end
+        return loaded[k]
+    end
+    function mt:__call(_, ...)
+        loaded = loaded or require(module)
+        mt.__call = function(_,...) return loaded(...) end
+        return loaded(...)
+    end
+
+    return setmetatable({}, mt)
+end
+
+utils.list = utils.lazy_require("keyfactor.utils.list")
+utils.string = utils.lazy_require("keyfactor.utils.string")
+utils.table = utils.lazy_require("keyfactor.utils.table")
+
 function utils.enum(list)
     local enum = {}
     for i, name in ipairs(list) do
@@ -12,53 +38,11 @@ function utils.enum(list)
 end
 
 function utils.is_callable(object)
-    if type(object) == "function" then
-        return true
-    elseif getmetatable(object) and getmetatable(object).__call then
+    if type(object)=="function" then
         return true
     end
-    return false
-end
-
-utils.string = {}
-function utils.string.lstrip(s)
-    return s:match("^%s*(.-)$")
-end
-
-function utils.string.rstrip(s)
-    return s:match("^(.-)%s*$")
-end
-
-function utils.string.strip(s)
-    return s:match("^%s*(.-)%s*$")
-end
-
-function utils.string.split_keycodes(s)
-    local i = 1
-    local a = 0
-    local b = 0
-    local result = {}
-    while i <= #s do
-        if a and a < i then
-            a,b = s:find('<%w[%w%-]->', i)
-        end
-        if a==i then
-            table.insert(result, s:sub(a,b))
-            i = b+1
-        else
-            table.insert(result, s:sub(i,i))
-            i = i+1
-        end
-    end
-    return result
-end
-
-utils.table = {}
-function utils.table.reverse(t)
-    local r = {}
-    for k,v in pairs(t) do
-        r[v] = k
-    end
+    local call = rawget(getmetatable(object) or {}, "__call")
+    return type(call)=="function"
 end
 
 function utils.get_register()
