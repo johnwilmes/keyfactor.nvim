@@ -16,54 +16,61 @@ function module.is_bindable(obj)
     return type(get_bind(obj))=="function"
 end
 
-function module.resolve(action, context)
-    return (get_bind(action))(context)
+function module.resolve(binding, context, params)
+    return (get_bind(binding))(context, params)
 end
 
 --[[
     start with params=params or {}
-    first resolve list-like part of bindings
-        - if value is bindable, on resolve it should return a table containing (string) key=value
-        pairs which will be extended into params
-        - otherwise value must be table, and this table is treated recursively as param binding
-        table
-    next resolve (string) key=value part of bindings
-        - if value is bindable, resolve it and assign value to key in params
-        - otherwise directly assign value to key in params
-    keys of form "part1__part2" are treated as values for params.part1.part2, etc.
 
-    return params, errors where errors is nil if all indices/values conformed to above description,
-    or a list of error messages otherwise
+    recurse through binding and produce two lists:
+        {leaf binding of list-like part}, { {string key, unresolved value} }
+
+    resolve each leaf binding and apply same recursion to output, then deep-set resulting (not
+    additionally resolved values) at corresponding key
+
+    finally resolve original string key values and deep set them in
 ]]
-function module.resolve_params(bindings, context, params, prefix)
-    params = params or {}
-    prefix = prefix or ""
-    for idx,value in ipairs(bindings) do
-        if module.is_bindable(value) then
-            value = module.resolve(value, context)
-        end
 
-        local new_prefix = "%s[%s]":format(prefix, tostring(idx))
-        if type(value)~="table" then
-            local msg="table value expected at index "..new_prefix
-            -- TODO log msg
-        else
-            module.resolve_params(value, context, params, new_prefix)
+local function flatten_params(tbl, bindings, params)
+    for _,v in ipairs(tbl) do
+        if module.is_bindable(v) then
+            bindings[#bindings+1]=v
+        elseif type(v)=="table" then
+            flatten_params(v, bindings, params)
         end
     end
-    for key,value in pairs(bindings) do
-        if type(key)=="string" then
-            if module.is_bindable(value) then
-                value = module.resolve(value, context)
-            end
-            utils.table.set(params, key, value, "__")
-        elseif not utils.list.is_index(key, bindings) then
-            local new_prefix = "%s[%s]":format(prefix, tostring(key))
-            local msg="invalid index "..new_prefix
-            -- TODO log msg
+
+    for k,v in pairs(tbl) do
+        if type(k)=="string" then
+            params[#params+1]={k,v}
+        elseif not utils.list.is_index(k, tbl) then
+            -- TODO log warning
         end
     end
-    return params
+end
+
+function module.resolve_params(binding, context, params)
+    local result = {}
+    local leaves = {}
+    local unresolved = {}
+    flatten_params(binding, leaves, unresolved)
+    for _,b in ipairs(leaves) do
+        local resolved = {}
+        flatten_params(module.resolve(b, context, params), {}, resolved)
+        for _,kv in ipairs(resolved) do
+            local k, v = unpack(kv)
+            utils.table.set(result, k, v, "__")
+        end
+    end
+    for _,kv in ipairs(unresolved) do
+        local k, v = unpack(kv)
+        if module.is_bindable(v) then
+            v = module.resolve(v, context, params)
+        end
+        utils.table.set(result, k, v, "__")
+    end
+    return result
 end
 
 --[[
@@ -72,22 +79,22 @@ end
         -if value is bindable, resolve it and append result to results
         -otherwise value should be table, recurse into it
 --]]
-function module.resolve_keypress(bindings, context, result, prefix)
+function module.resolve_keypress(binding, context, params, result, prefix)
     result = result or {}
     prefix = prefix or ""
     errors = errors or {}
 
-    if module.is_bindable(bindings) then
-        result[#result+1] = module.resolve(bindings, context)
-    elseif type(value=="table") then
-        for idx,value in ipairs(bindings) do
+    if module.is_bindable(binding) then
+        result[#result+1] = module.resolve(binding, context, params)
+    elseif type(binding)=="table" then
+        for idx,value in ipairs(binding) do
             local new_prefix="%s[%s]":format(prefix, tostring(idx))
-            module.resolve_keypress(value, context, result, new_prefix)
+            module.resolve_keypress(value, context, params, result, new_prefix)
         end
         for name in context.key do
-            if bindings[name]~=nil then
+            if binding[name]~=nil then
                 local new_prefix="%s.%s":format(prefix, name)
-                module.resolve_keypress(value, context, result, new_prefix)
+                module.resolve_keypress(value, context, params, result, new_prefix)
             end
         end
     else
@@ -119,24 +126,21 @@ function bindable_mt:__call(bindings)
     return self:with(bindings)
 end
 
-function bindable_mt:__bind(context)
-    local params
+function bindable_mt:__bind(context, params)
     if self._with then
-        params = module.resolve_params(self._with, context)
-    else
-        params = context.params
+        params = module.resolve_params(self._with, context, params)
     end
 
     if self.fill then
         -- fill fields of params listed in fill
     end
 
-    return self:_wrapped(context)
+    return module.resolve(self._wrapped, context, params)
 end
 
 function module.bindable(callable, obj)
     obj = obj or {}
-    obj = {_erapped=callable,
+    obj = {_wrapped=callable,
         _fill = obj._fill or obj.fill,
         _with = obj._with or obj.with,
         _index = obj._index or obj.index
@@ -145,16 +149,16 @@ function module.bindable(callable, obj)
 end
 
 function module.action(callable, obj)
-    local wrapped = function(binding, context)
-        callable(context.params)
+    local wrapped = function(binding, _, params)
+        callable(params)
         return binding
     end
     return module.bindable(wrapped, obj)
 end
 
 function module.param(callable, obj)
-    local wrapped = function(binding, context)
-        return callable(context.params)
+    local wrapped = function(_, _, params)
+        return callable(params)
     end
     return module.bindable(wrapped, obj)
 end
@@ -162,7 +166,7 @@ end
 function module.capture(callable, obj)
     return function(...)
         local capture = {...}
-        local wrapped = function(binding, context)
+        local wrapped = function(binding, _, params)
             return callable(capture, params)
         end
         return module.bindable(wrapped, obj)
@@ -171,13 +175,13 @@ end
 
 function module.bind(...)
     local actions = {...}
-    local wrapped = function(_, context)
-        local results = module.resolve_keypress(actions, context)
+    local wrapped = function(_, context, params)
+        local results = module.resolve_keypress(actions, context, params)
         if #results > 0 then
             return results
         end
     end
-    return module.bindable(wrapped, obj)
+    return module.bindable(wrapped)
 end
 
 do
@@ -188,8 +192,8 @@ do
         return setmetatable({_index=index}, outer_mt)
     end
 
-    function outer_mt:__bind(context)
-        local result = context.params
+    function outer_mt:__bind(_, params)
+        local result = params
         for _,k in ipairs(self._index) do
             result = (result or {})[k]
         end
@@ -281,14 +285,14 @@ do
 
     local on_mt = {}
 
-    function on_mt:__bind(context)
+    function on_mt:__bind(context, params)
         if self._condition==nil then
             error
         end
 
         local bindings
         local n
-        if module.resolve(self._condition, context) then
+        if module.resolve(self._condition, context, params) then
             bindings = self._true or {true}
             n = self._n_true or 1
         else
@@ -297,7 +301,7 @@ do
         end
 
         local result = {}
-        local eval = function(b) return module.resolve(b, context) end
+        local eval = function(b) return module.resolve(b, context, params) end
         for i=1,n do
             local r = reduce(bindings[i], eval)
             if r ~= nil then
@@ -364,10 +368,10 @@ end
 -- otherwise returns opt1
 do
     local toggle_mt = {}
-    function toggle_mt:__bind(context)
+    function toggle_mt:__bind(context, params)
         local value
         if self.value then
-            value = module.resolve(self.value, context)
+            value = module.resolve(self.value, context, params)
         else
             value = self.state or self[#self]
         end

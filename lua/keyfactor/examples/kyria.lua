@@ -1,6 +1,6 @@
 local go = require("keyfactor.action")
 
-local bind, wring, redo, set, get, on, outer
+local bind, wring, redo, set, get, on, outer, clear
 
 local keys = {
     seek="_",
