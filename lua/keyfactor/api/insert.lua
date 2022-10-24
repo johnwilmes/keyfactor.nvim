@@ -84,8 +84,8 @@ end
 
 function module.literal(selection, orientation, value)
     local lines = vim.split(value, "\n")
-    selection:set_gravity("right") -- TODO
-    for idx, range in selection:iter{orientation=orientation} do
+    for idx, range in selection:iter() do
+        -- gravity is already set to right
         local pos = range[orientation]
         vim.api.nvim_buf_set_text(selection.buffer, pos[1], pos[2], pos[1], pos[2], lines)
     end
@@ -96,12 +96,12 @@ end
 --      e.g., can delete base start of current range, or can't delete past any earlier ranges
 function module.vim(selection, orientation, value)
     -- TODO make sure "start" is in backspace
-    selection:set_gravity("right") -- TODO
 
+    -- TODO need to either ensure virtualedit has onemore or all, or sometimes use a instead of i
     local cmd = "normal! i"..value
     vim.api.nvim_buf_call(selection.buffer, function()
         local view = vim.fn.winsaveview()
-        for idx, range in selection:iter{orientation=orientation} do
+        for idx, range in selection:iter() do
             local pos = range[orientation]
             vim.api.nvim_win_set_cursor(0, {pos[1]+1, pos[2]})
             vim.cmd(cmd)

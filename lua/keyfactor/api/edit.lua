@@ -13,24 +13,23 @@ end
 --- higher level
 
 --[[
-    selection:iter opts:
-        orientation - if present, used to order selection; otherwise, selection indices used
-        start = "first", "focus", "last"; default "first"
-        offset = signed integer, number of steps to rotate alignment; default 0
-        reverse = boolean; default false (reverse order of selection, keeping order of register)
-]]
-
-
---[[
 Alignment strategies:
-
-    - truncate to shorter of register/selection
-        - this is the only strategy used by paste_lines and replace
-
     - repeat shorter register cyclically
         - use a "virtual register" wrapper around a register to repeat it cyclically
+    - truncate to register that is shorter than selection (removing ranges)
+        - modify selection before/after calling
+    - truncate to selection that is shorter than register by ommitting register entries
+        - wrap register
     - add empty ranges at end to match longer register
         - modify the selection before calling paste_lines/replace
+
+    - reverse order of register compared to selection
+        - if we actually ever needed this, again use a wrapper around the register to implement it
+    - offset between register and selection
+        - again use a wrapper!
+
+This level of the API does not offer ANY support for different alignment strategies; the functions
+REQUIRE that selection and register have equal length
 
 Redundant methods:
     - replace_lines:
@@ -49,18 +48,19 @@ Redundant methods:
 --[[
     opts: before (boolean) default false
         - whether the resulting empty range is placed on the previous or following line
-
-        align - table of opts for align_register (can have separate or no orientation)
 ]]
-function module.paste_lines(selection, orientation, register, opts)
+function module.paste_lines(selection, orientation, register, before)
+    local n_reg = register.length or #register
+    if n_reg~=selection.length then
+        -- TODO error
+    end
+
     local out_ranges = {}
     local reg_idx = 0
-    local n_reg = register.length or #register
-    for sel_idx, range in selection:iter(opts.align) do
+    for sel_idx, range in selection:iter() do
         reg_idx = reg_idx+1
-        if reg_idx > n_reg then break end
         local pos = range[orientation]
-        if opts.before then
+        if before then
             vim.api.nvim_buf_set_lines(selection.buffer, pos[1], pos[1], true, {""})
             pos = kf.position{pos[1], 0}
         else
@@ -84,7 +84,7 @@ end
         orientation - column of empty range is copied from old range at this orientation
             -defaults to "outer", "before" iff reverse
 --]]
-function module.delete_lines(selection, opts)
+function module.delete_lines(selection, orientation, before)
     --[[
         First, iterate top to bottom. Compute:
             - (merged) line ranges to delete
@@ -97,18 +97,16 @@ function module.delete_lines(selection, opts)
     local prev_right = -1 -- previous endpoint
     local prev_left = -1
 
-    local orientation = opts.orientation or {}
+    local orientation = orientation or {}
     if not orientation.boundary then
         orientation.boundary = "outer"
     end
     if not orientation.side then
-        orientation.side = (opts.before and "before") or "after"
+        orientation.side = (before and "before") or "after"
     end
     -- TODO validate orientation
 
-    -- use before side for iteration order, so we guarantee that previously seen ranges started
-    -- before current range in iteration
-    for idx, range in selection:iter{orientation={boundary="outer", side="before"}} do
+    for idx, range in selection:iter() do
         local left = max(range["outer"][1][1]-total, prev_right)
         local right = max(range["outer"][2][1]+1-total, prev_right)
         if left==prev_right then
@@ -120,7 +118,7 @@ function module.delete_lines(selection, opts)
         end
 
         local line = prev_left
-        if opts.before then
+        if before then
             line = max(line-1,0)
         end
         out_ranges[idx] = {kf.range{kf.position{line, range[orientation][2]}}}
@@ -137,61 +135,77 @@ end
     opts:
         boundary "inner"/"outer"; default "outer"
 --]]
-function module.delete(selection, opts)
-    -- TODO we assume that selection is created by setting extmarks using strict=false, or that
-    -- the range will otherwise be truncated...
-
+function module.delete(selection, boundary)
+    boundary = boundary or "outer"
     for idx, range in selection:iter() do
-        range = range[opts.boundary]
-        local left, right = range[1], range[2]
-        if left != right then
-            vim.api.nvim_buf_set_text(selection.buffer, left[1], left[2], right[1], right[2], {})
+        range = range[boundary]
+        local before, after = range[1], range[2]
+        if before~=after then
+            vim.api.nvim_buf_set_text(selection.buffer, before[1], before[2], after[1], after[2], {})
         end
     end
     return selection -- TODO does it need to be refreshed with some call? using extmark positions
 end
 
---[[
-    opts:
-        align - passed to align_register
+local replace_gravity = {
+    inner=kf.orientable{false, true},
+    before=kf.orientable{false, true, true, true},
+    after=kf.orientable{false, false, false, true},
+}
 
-        
-        mode: "inner"/"outer"/"all" (default "all")
+--[[
+        target: "inner"/"outer"/"all" (default "all")
             all: replace entire selection with entire register
             inner: replace selection inner with register inner
             outer: replace selection outer with register outer
 --]]
-function module.replace(selection, register, opts)
-    local out_ranges = {}
-    local reg_idx = 0
+function module.replace(selection, register, target)
     local n_reg = register.length or #register
-    for sel_idx, range in selection:iter(opts.align) do
-        reg_idx = reg_idx+1
-        if reg_idx > n_reg then break end
-        local text = register[reg_idx]
-        if mode=="inner" then
-            text={inner=text.inner}
-        elseif mode=="outer" then
-            text={before=text.before, after=text.after}
-        end
-        local result = module.set_text(range, text)
-        out_ranges[sel_idx]={result}
+    if n_reg~=selection.length then
+        -- TODO error
     end
-    return selection:get_child(out_ranges)
+
+    if target=="inner" then
+        target = {inner=true}
+    elseif target=="outer" then
+        target = {before=true, after=true}
+    else
+        target = {inner=true, before=true, after=true}
+    end
+
+    local reg_idx = 0
+    for sel_idx, range in selection:iter() do
+        reg_idx = reg_idx+1
+        local text = register[reg_idx]
+        --[[
+        We always set inner first, to minimize cascading effects on any other existing selections
+        with gravity toward this range and having outer touching outer of this range.
+
+        We set gravity before modifying each part of the range, so that the extmarks of this range
+        update properly
+        --]]
+        for _,part_name in ipairs{"inner", "before", "after"} do
+            if target[part_name] then
+                local part = range[part_name]
+                selection:set_gravity(sel_idx, replace_gravity[part_name])
+                vim.api.nvim_buf_set_text(selection.buffer,
+                    part[1][1], part[1][2],
+                    part[2][1], part[2][2],
+                    {text[part_name]})
+            end
+        end
+    end
+    return selection
 end
 --
 
 --[[
-    opts:
-        same as for module.align_register
-        which I guess is the same as for selection:iter...
-
     this doesn't actually write to register, just returns what would be used for that call
 --]]
-function module.yank(selection, opts)
+function module.yank(selection)
     local result = {}
     local origin = {}
-    for idx, range in selection:iter{opts} do
+    for idx, range in selection:iter() do
         local text = module.get_text(range)
         result[#result+1]=text
         origin[#result]=idx
