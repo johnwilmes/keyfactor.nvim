@@ -1,14 +1,35 @@
 local module = {}
 
--- ASSUMPTIONS: selections have inner gravity and have disjoint ranges (overlap has length zero)
-
-function module.get_text(range)
+function module.get_range_text(buffer, range)
+    -- TODO error if buffer is not loaded
+    local result = {}
+    for _,part_name in ipairs{"inner", "before", "after"} do
+        local part = range[part_name]
+        local lines = vim.api.nvim_buf_get_text(buffer,
+            part[1][1], part[1][2],
+            part[2][1], part[2][2], {})
+        result[part_name] = lines
+    end
 end
 
-function module.set_text(range, text)
-    -- text.before, text.inner, text.after
-    -- parts of text that are nil are left untouched in range
+function module.get_text(selection)
+    local result = {}
+    for idx, range in selection:iter() do
+        result[#result+1] = module.get_range_text(range)
+    end
+    return result
 end
+
+function module.get_lines(selection)
+    local result = {}
+    for idx, range in selection:iter() do
+        local lines = vim.api.nvim_buf_get_lines(selection.buffer,
+            range["outer"][1][1], range["outer"][2][1]+1, true)
+        result[#result+1] = {inner=lines, before={""}, after={""}}
+    end
+    return result
+end
+
 
 --- higher level
 
@@ -22,6 +43,8 @@ Alignment strategies:
         - wrap register
     - add empty ranges at end to match longer register
         - modify the selection before calling paste_lines/replace
+    - fill register with empty entries ("") to match longer selection
+        - wrap register
 
     - reverse order of register compared to selection
         - if we actually ever needed this, again use a wrapper around the register to implement it
@@ -49,27 +72,29 @@ Redundant methods:
     opts: before (boolean) default false
         - whether the resulting empty range is placed on the previous or following line
 ]]
-function module.paste_lines(selection, orientation, register, before)
-    local n_reg = register.length or #register
-    if n_reg~=selection.length then
+function module.paste_lines(selection, orientation, text, before)
+    if #text~=selection.length then
         -- TODO error
     end
 
     local out_ranges = {}
-    local reg_idx = 0
-    for sel_idx, range in selection:iter() do
-        reg_idx = reg_idx+1
+    for idx, range in selection:iter() do
         local pos = range[orientation]
         if before then
-            vim.api.nvim_buf_set_lines(selection.buffer, pos[1], pos[1], true, {""})
             pos = kf.position{pos[1], 0}
         else
-            vim.api.nvim_buf_set_lines(selection.buffer, pos[1]+1, pos[1]+1, true, {""})
             pos = kf.position{pos[1]+1, 0}
         end
-        local text = register[reg_idx]
-        local result = module.set_text(kf.range{pos}, text)
-        out_ranges[sel_idx]={result}
+        local bounds = {pos}
+        local lines = {""}
+        for _,part_name in ipairs{"before", "inner", "after"} do
+            local part = text[idx][part_name]
+            lines[#lines] = lines[#lines]..part[1]
+            vim.list_extend(lines, part, 2)
+            bounds[#bounds+1] = kf.position{pos[1]+#lines-1, #(lines[#lines])}
+        end
+        vim.api.nvim_buf_set_lines(selection.buffer, pos[1], pos[1], true, lines)
+        out_ranges[idx]={kf.range(bounds)}
     end
     return selection:get_child(out_ranges)
 end
@@ -147,21 +172,14 @@ function module.delete(selection, boundary)
     return selection -- TODO does it need to be refreshed with some call? using extmark positions
 end
 
-local replace_gravity = {
-    inner=kf.orientable{false, true},
-    before=kf.orientable{false, true, true, true},
-    after=kf.orientable{false, false, false, true},
-}
-
 --[[
         target: "inner"/"outer"/"all" (default "all")
             all: replace entire selection with entire register
             inner: replace selection inner with register inner
             outer: replace selection outer with register outer
 --]]
-function module.replace(selection, register, target)
-    local n_reg = register.length or #register
-    if n_reg~=selection.length then
+function module.replace(selection, text, target)
+    if #text~=selection.length then
         -- TODO error
     end
 
@@ -173,10 +191,7 @@ function module.replace(selection, register, target)
         target = {inner=true, before=true, after=true}
     end
 
-    local reg_idx = 0
-    for sel_idx, range in selection:iter() do
-        reg_idx = reg_idx+1
-        local text = register[reg_idx]
+    for idx, range in selection:iter() do
         --[[
         We always set inner first, to minimize cascading effects on any other existing selections
         with gravity toward this range and having outer touching outer of this range.
@@ -187,29 +202,15 @@ function module.replace(selection, register, target)
         for _,part_name in ipairs{"inner", "before", "after"} do
             if target[part_name] then
                 local part = range[part_name]
-                selection:set_gravity(sel_idx, replace_gravity[part_name])
+                local gravity = kf.selection.active_gravity[part_name]
+                selection:set_gravity(sel_idx, gravity)
                 vim.api.nvim_buf_set_text(selection.buffer,
                     part[1][1], part[1][2],
                     part[2][1], part[2][2],
-                    {text[part_name]})
+                    text[idx][part_name])
             end
         end
     end
     return selection
-end
---
-
---[[
-    this doesn't actually write to register, just returns what would be used for that call
---]]
-function module.yank(selection)
-    local result = {}
-    local origin = {}
-    for idx, range in selection:iter() do
-        local text = module.get_text(range)
-        result[#result+1]=text
-        origin[#result]=idx
-    end
-    return result, origin
 end
 

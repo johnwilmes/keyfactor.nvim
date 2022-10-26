@@ -1,15 +1,25 @@
 local module = {}
 
-local selection_mt = {}
-
---[[
-local right_gravity = {
-    inner = {inner={true, false}, outer={true, false}},
-    outer = {inner={false, true}, outer={false, true}},
-    left = {inner={false, false}, outer={false, false}},
-    right = {inner={true, true}, outer={true, true}},
+-- For editing the corresponding part of range: 
+module.active_gravity = {
+    inner=kf.orientable{false, true},
+    before=kf.orientable{false, true, true, true},
+    after=kf.orientable{false, false, false, true},
 }
-]]
+
+-- For when this range is before/after the actively edited part of buffer
+module.inactive_gravity = {
+    before=kf.orientable{false},
+    after=kf.orientable{true},
+}
+
+
+local selection_mt = {}
+selection_mt.__index = selection_mt
+function selection_mt:__gc()
+    vim.api.nvim_buf_clear_namespace(self.buffer, self._ns.inner, 0, -1)
+    vim.api.nvim_buf_clear_namespace(self.buffer, self._ns.outer, 0, -1)
+end
 
 local function set_selection_extmark(buffer, namespace, id, range, gravity)
     for _,boundary in ipairs{"inner", "outer"} do
@@ -25,9 +35,26 @@ local function set_selection_extmark(buffer, namespace, id, range, gravity)
     end
 end
 
-function selection_mt:__gc()
-    vim.api.nvim_buf_clear_namespace(self.buffer, self._ns.inner, 0, -1)
-    vim.api.nvim_buf_clear_namespace(self.buffer, self._ns.outer, 0, -1)
+local function get_new_selection(buffer, ranges)
+    if buffer==0 then buffer=vim.api.nvim_get_current_buf() end
+
+    ranges = -- TODO flatten ranges table, sort ranges, and truncate ranges so they don't overlap
+
+    local selection = {
+        buffer=buffer
+        id = --TODO new id,
+        length = #ranges,
+        _cache = ranges,
+        _changedtick = vim.api.nvim_buf_get_changedtick,
+        _ns = {inner=vim.api.nvim_create_namespace(""), outer=vim.api.nvim_create_namespace("")},
+    }
+
+    local gravity = kf.inactive_gravity.before
+    for id,range in ipairs(ranges) do
+        set_selection_extmark(buffer, selection._ns, id, range, gravity)
+    end
+
+    return setmetatable(selection, selection_mt)
 end
 
 function selection_mt:get_range(id)
@@ -60,7 +87,7 @@ local function get_next_range(selection, id)
         id=1
     else
         -- set left gravity to ids we have already processed
-        selection:set_gravity(id, kf.orientable{false})
+        selection:set_gravity(id, module.inactive_gravity.before)
         if id==selection.length then
             return nil
         else
@@ -83,7 +110,7 @@ function selection_mt:iter(offset)
     --]]
 
     for id=1,self.length do
-        self:set_gravity(id, kf.orientable{true})
+        self:set_gravity(id, module.inactive_gravity.after)
     end
     return get_next_range, self
 end
@@ -103,31 +130,39 @@ function selection_mt:get_child(new_ranges)
     return child
 end
 
-
-local function get_new_selection(buffer, ranges)
-    if buffer==0 then buffer=vim.api.nvim_get_current_buf() end
-
-    ranges = -- TODO flatten ranges table, sort ranges, and truncate ranges so they don't overlap
-
-    local selection = {
-        buffer=buffer
-        id = --TODO new id,
-        length = #ranges,
-        _cache = ranges,
-        _changedtick = vim.api.nvim_buf_get_changedtick,
-        _ns = {inner=vim.api.nvim_create_namespace(""), outer=vim.api.nvim_create_namespace("")},
-    }
-
-    local gravity = kf.orientable{true}
-    for id,range in ipairs(ranges) do
-        set_selection_extmark(buffer, selection._ns, id, range, gravity)
+-- reduce to range at position or part given by orientation
+function selection_mt:reduce(orientation)
+    local out_ranges = {}
+    for i=1,self.length do
+        local range = self:get_range(i)
+        if range:get_length(orientation) == 1 then
+            out_ranges[i]={kf.range{range[orientation]}}
+        else
+            out_ranges[i]={kf.range(range[orientation])}
+        end
     end
+    return self:get_child(out_ranges)
+end
 
-    return setmetatable(selection, selection_mt)
+-- convert entire range to outer, and put empty inner at position given by orientation
+function selection_mt:reduce_inner(orientation)
+    local out_ranges = {}
+    for i=1,self.length do
+        local range = self:get_range(i)
+        local part = range[orientation]
+        local n = range:get_length(orientation)
+        if n==1 then
+            out_ranges[i]={kf.range{range[1], part, part, range[4]}}
+        elseif n==2 then
+            out_ranges[i]={kf.range{range[1], part[1], part[2], range[4]}}
+        else
+            out_ranges[i]={range}
+        end
+    end
+    return self:get_child(out_ranges)
 end
 
 local module_mt = {
     __call = get_new_selection
 }
-
 return setmetatable(module, module_mt)

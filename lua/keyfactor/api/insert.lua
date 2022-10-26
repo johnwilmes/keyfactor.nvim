@@ -1,5 +1,7 @@
 local module
 
+local target_position = {before=2, inner=3, after=4}
+
 -- insert individual operations (insert text/indent/line break/delete) work on selections, but
 --      user-facing actions take windows
 -- insert mode operates on windows
@@ -24,69 +26,44 @@ for linewise, truncate makes the most sense, but could do convert to outer
     - reverse param might be reasonable for linewise
 --]]
 
-function module.initialize(selection, orientation, opts)
-    local orientation = params.orientation
-    local keep = params.keep_selection
-    local selection = params.selection
-
+function module.open(selection, orientation, before, preserve)
     local out_ranges = {}
-    if params.linewise then
-        local open_line
-        if params.reverse then
-            -- "\8" is backspace; type a and delete to preserve indent
-            open_line = "normal! Oa\8"
-        else
-            open_line = "normal! oa\8"
-        end
-        vim.api.nvim_win_call(context.active.window, function()
-            local view = vim.fn.winsaveview()
-            for idx, range in selection:iter{orientation=orientation, reverse=params.reverse} do
-                local bounds = {}
-                local pos = range[orientation]
-                vim.api.nvim_win_set_cursor(0, {pos[1]+1, 0})
-                vim.cmd(open_line)
-                local line = vim.fn.line(".")-1
-                bounds[2] = kf.position{line, 0}
-                bounds[3] = kf.position{line, vim.fn.col(".")-1}
-                if keep then
-                    bounds[1] = utils.min(range[1], bounds[2])
-                    bounds[4] = utils.max(range[4], bounds[3])
-                else
-                    bounds[1]=bounds[2]
-                    bounds[4]=bounds[3]
-                end
-                out_ranges[idx]={kf.range(bounds)}
-            end
-            vim.fn.winrestview(view)
-        end)
+    local open_line
+    if before then
+        -- "\8" is backspace; type a and delete to preserve indent
+        open_line = "normal! Oa\8"
     else
-        if keep=="append" then
-            if orientation.boundary=="outer" and orientation.side=="left" then
-                -- can't append to position 1
-                keep=true
-            end
-        end
-        if keep~="append" then
-            for idx, range in selection:iter() do
-                if keep then
-                    range = kf.range{range[1], range[orientation], range[orientation], range[4]}
-                else
-                    range = kf.range{range[orientation]}
-                end
-                out_ranges[idx]={range}
-            end
-            orientation = {boundary="inner", side="2"}
-        end
+        open_line = "normal! oa\8"
     end
+    vim.api.nvim_buf_call(selection.buffer, function()
+        local view = vim.fn.winsaveview()
+        for idx, range in selection:iter() do
+            local bounds = {}
+            local pos = range[orientation]
+            vim.api.nvim_win_set_cursor(0, {pos[1]+1, 0})
+            vim.cmd(open_line)
+            local line = vim.fn.line(".")-1
+            pos = kf.position{line, vim.fn.col(".")-1}
+            bounds = {kf.position{line, 0}, pos, pos, pos}
+            if preserve then
+                bounds[1] = utils.min(range[1], bounds[1])
+                bounds[4] = utils.max(range[4], bounds[4])
+            end
+            out_ranges[idx]={kf.range(bounds)}
+        end
+        vim.fn.winrestview(view)
+    end)
 
-    return selection:get_child(out_ranges), orientation
+    return selection:get_child(out_ranges)
 end
 
-function module.literal(selection, orientation, value)
+--[[ target: "inner", "before", or "after" ]]
+function module.literal(selection, target, value)
     local lines = vim.split(value, "\n")
     for idx, range in selection:iter() do
-        -- gravity is already set to right
-        local pos = range[orientation]
+        local gravity = kf.selection.active_gravity[target]
+        selection:set_gravity(sel_idx, gravity)
+        local pos = range[target_position[target]]
         vim.api.nvim_buf_set_text(selection.buffer, pos[1], pos[2], pos[1], pos[2], lines)
     end
     return selection
@@ -94,17 +71,22 @@ end
 
 -- TODO support some variant of 'backspace' not containing "start";
 --      e.g., can delete base start of current range, or can't delete past any earlier ranges
-function module.vim(selection, orientation, value)
+function module.vim(selection, target, value)
     -- TODO make sure "start" is in backspace
 
-    -- TODO need to either ensure virtualedit has onemore or all, or sometimes use a instead of i
-    local cmd = "normal! i"..value
     vim.api.nvim_buf_call(selection.buffer, function()
         local view = vim.fn.winsaveview()
         for idx, range in selection:iter() do
-            local pos = range[orientation]
-            vim.api.nvim_win_set_cursor(0, {pos[1]+1, pos[2]})
-            vim.cmd(cmd)
+            local gravity = kf.selection.active_gravity[target]
+            selection:set_gravity(sel_idx, gravity)
+            local pos = range[target_position[target]]
+            if pos[2]==0 then
+                vim.api.nvim_win_set_cursor(0, {pos[1]+1, pos[2]})
+                vim.cmd("normal! i"..value)
+            else
+                vim.api.nvim_win_set_cursor(0, {pos[1]+1, pos[2]-1})
+                vim.cmd("normal! a"..value)
+            end
         end
         vim.fn.winrestview(view)
     end)
