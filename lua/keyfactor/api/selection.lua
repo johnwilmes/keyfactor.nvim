@@ -97,7 +97,7 @@ local function get_next_range(selection, id)
     return id, selection:get_range(id)
 end
 
-function selection_mt:iter(offset)
+function selection_mt:iter()
     --[[
         first, set all extmarks to right gravity
         at the time each range is processed, set current extmarks to left gravity
@@ -160,6 +160,146 @@ function selection_mt:reduce_inner(orientation)
         end
     end
     return self:get_child(out_ranges)
+end
+
+
+
+-- TODO put this in some other module
+local function truncate_positions(positions, bound, reverse)
+    --[[ truncate positions to bound. if reverse, then ensure all positions are before bound;
+    --otherwise, ensure all positions are after bound (by replacing position with bound as needed) ]]
+    local truncate
+    if reverse then
+        truncate = function(i,v) return utils.min(v, bound) end
+    else
+        truncate = function(i,v) return utils.max(v, bound) end
+    end
+    return utils.list.map(positions, truncate)
+end
+
+--[[ opts: reverse, partial ]]
+local function get_next_range(buffer, range, textobject, orientation, opts)
+    local pos = range[orientation]
+    local boundary = orientation.boundary
+
+    local tobj_params = {
+        orientation = {boundary=boundary},
+        reverse = opts.reverse,
+        buffer = buffer,
+        pos = pos,
+    }
+    if not opts.partial then
+        tobj_params.orientation.side=orientation.side
+    end
+    local next_range = textobject:get_next(tobj_params)
+
+    --[[ alternate orientation: progress is guaranteed using this orientation ]]
+    local alt = {
+        boundary=boundary,
+        side=(opts.reverse and "before") or "after",
+    }
+
+    if next_range and opts.partial then
+        local old = range[orientation.side]
+        local new
+        local sides = {next_range["before"], next_range["after"]}
+        --[[
+            filter sides: remove anything that isn't on the desired side of pos
+                (as determined by opts.reverse, comparing based on boundary)
+
+            sort sides (reversed if reverse)
+
+            return first element of sides
+        --]]
+        if opts.reverse then
+            sides = utils.list.filter(sides, function(v) return v[boundary] < pos end)
+            sides = utils.list.sort(sides, function(v) return v[boundary] end)
+            new = sides[#sides]
+        else
+            sides = utils.list.filter(sides, function(v) return v[boundary] > pos end)
+            sides = utils.list.sort(sides, function(v) return v[boundary] end)
+            new = sides[1]
+        end
+
+        if new[boundary]==range[alt] then
+            -- the new side agrees with the original range
+            -- only possible if orientation ~= alt
+            -- Note: it's okay to have new[boundary] closer to pos than old[alt]!
+            return get_next_range(buffer, range, textobject, alt, opts)
+        end
+
+        new = truncate_positions(new, new[boundary], opts.reverse)
+        local bounds = {old[1], old[2], new[1], new[2]}
+        table.sort(bounds)
+        next_range = kf.range(bounds)
+    end
+    return next_range
+end
+
+--[[
+    opts:
+        reverse (boolean)
+        partial (boolean)
+]]
+function selection_mt:augment_textobject(textobject, orientation, opts)
+    local child = {}
+
+    local inverse = kf.invert_orientation(orientation)
+    for idx, range in selection:iter() do
+        local new = get_next_range(self.buffer, range, textobject, orientation, opts)
+        if new==nil then
+            child[idx] = {range}
+        else
+            local old = range[inverse.side]
+            if opts.reverse then new = new["before"]
+            else new = new["after"]
+            end
+            new = truncate_positions(new, old[orientation.boundary], inverse.side=="after")
+            local bounds = {old[1], old[2], new[1], new[2]}
+            table.sort(bounds)
+            child[idx] = {kf.range(bounds)}
+        end
+    end
+    return self:get_child(child)
+end
+
+
+--[[ opts:
+--      reverse
+--      partial
+--      wrap
+--]]
+function selection_mt:next_textobject(textobject, orientation, opts)
+    local child = {}
+    local wrap, wrap_bound = nil, nil
+    for idx, range in selection:iter() do
+        local next_range = get_next_range(self.buffer, range, textobject, orientation, opts)
+        if next_range==nil and opts.wrap then
+            if not wrap then
+                if opts.reverse then
+                    local line = vim.api.nvim_buf_line_count(self.buffer)-1
+                    local col = utils.line_length(self.buffer, line)
+                    wrap = kf.range{kf.position{line, col+1}}
+                    wrap_bound =kf.position{line, col}
+                else
+                    wrap = kf.range{kf.position{0,-1}}
+                    wrap_bound = kf.position{0,0}
+                end
+            end
+
+            next_range = get_next_range(self.buffer, wrap, textobject, orientation, opts)
+            next_range = kf.range(truncate_positions(next_range, wrap_bound, opts.reverse))
+        end
+        child[idx]={next_range or range}
+    end
+    return self:get_child(child)
+end
+
+function selection_mt:subselect_textobject(textobject)
+
+end
+
+function selection_mt:split_textobject(textobject)
 end
 
 local module_mt = {

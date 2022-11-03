@@ -12,6 +12,7 @@ local module = {}
         reverse (boolean)
         partial (boolean)
         augment (boolean)
+        wrap (boolean)
         multiple = "split" or "select" or falsey
             (default to "select" if truthy and not "split"?)
         choose = "auto" or "telescope" or "hop" or falsey
@@ -20,46 +21,28 @@ local module = {}
 
 
 --]]
-local function get_partial_side(pos, next_range, params)
-    local sides = {next_range["left"], next_range["right"]}
-    --[[
-        filter sides: remove anything that isn't on the desired side of pos
-            (as determined by params.reverse, comparing based on params.orientation.boundary)
-
-        sort sides (reversed in params.reverse)
-
-        return first element of sides
-    --]]
-    if params.reverse then
-        sides = utils.list.filter(sides, function(v) return v[params.orientation.boundary] < pos end)
-        sides = utils.list.sort(sides, function(v) return v[params.orientation.boundary] end)
-        return sides[#sides]
-    else
-        sides = utils.list.filter(sides, function(v) return v[params.orientation.boundary] > pos end)
-        sides = utils.list.sort(sides, function(v) return v[params.orientation.boundary] end)
-        return sides[1]
-    end
-
-end
-
 module.select_textobject = action(function(params)
-    local selection = params.selection
+    local window = vim.api.nvim_get_current_win()
+    local selection = kf.get_selection(window)
+    local focus = kf.get_focus(window)
 
     if params.multiple then
-        if params.augment then
-            -- TODO iterate over existing selection, and either subselect or internally split
-            -- (if selection is empty, do nothing)
-            for entry in selection:iter() do
-                local range = entry.range:read()[params.orientation.boundary]
-                local matches = params.textobject:get_all{range=range, buffer=params.buffer}
-            end
+        if not params.augment then
+            selection = kf.selection(selection.buffer, kf.range.buffer(selection.buffer))
+        end
+        if params.multiple=="split" then
+            selection = selection:split_textobject(params.textobject)
         else
-            -- TODO replace selection by selecting from/splitting entire buffer
+            selection = selection:subselect_textobject(params.textobject)
         end
         if params.choose then
-            -- TODO if current (replaced) selection is not empty, use chooser to select a subset of
-            -- the ranges
-            -- chooser({select multiple, on_confirm=...})
+            local all = selection:get_all()
+            local confirm, ranges = kf.prompt.range{options=all, multiple=true, picker="telescope"}
+            local child = {}
+            for _,idx in ipairs(ranges) do
+                child[idx]={all[idx]}
+            end
+            return selection:get_child(child)
         end
     else
         if params.choose then
@@ -71,60 +54,87 @@ module.select_textobject = action(function(params)
             --
             -- chooser({select one, on_confirm=...})
         else
-            local tobj_params = {
-                orientation = {
-                    boundary=params.orientation.boundary,
-                },
-                reverse = params.reverse,
-                buffer = params.buffer,
-            }
-            if not params.partial then
-                tobj_params.orientation.side=params.orientation.side
-            end
-
-            local inverse = kf.invert_orientation(params.orientation)
-            for entry in selection:iter() do
-                local range = entry.range:read()
-                local pos = range[params.orientation]
-                tobj_params.position = pos
-                local next_range = params.textobject:get_next(tobj_params)
-                if next_range~=nil and (params.augment or params.partial) then
-                    local new, old
-                    if params.augment then
-                        old = range[inverse.side]
-                        if params.partial then
-                            new = get_partial_side(pos, next_range, params)
-                        else
-                            new = next_range[params.orientation.side]
-                        end
-                        if inverse.side=="left" then
-                            pos = old[2]
-                        else
-                            pos = old[1]
-                        end
-                    else -- params.augment = false, params.partial = true
-                        old = range[params.orientation.side]
-                        new = get_partial_side(pos, next_range, params)
-                    end
-
-                    -- truncate new to old
-                    local better
-                    if params.reverse then
-                        better = function(i,v) return utils.min(v, pos) end
-                    else
-                        better = function(i,v) return utils.max(v, pos) end
-                    end
-                    new = utils.list.map(new, better)
-                    local bounds = {old[1], old[2], new[1], new[2]}
-                    table.sort(bounds)
-                    entry.range:write(kf.range(bounds))
-                elseif not params.augment then
-                    entry.range:write(next_range)
-                end -- else params.augment = true and next_range = nil; do nothing
+            local opts = {reverse = params.reverse, partial = params.partial, wrap=params.wrap}
+            if params.augment then
+                selection = selection:augment_textobject(params.textobject, params.orientation, opts)
+            else
+                selection = selection:next_textobject(params.textobject, params.orientation, opts)
             end
         end
     end
-end, {"selection", "orientation"})
+
+    kf.set_selection(window, selection)
+    kf.scroll_to_focus(window)
+end, {"orientation"})
+
+module.select_focus = action(function()
+    local window = vim.api.nvim_get_current_win()
+    local selection = kf.get_selection(window)
+    local focus = kf.get_focus(window)
+
+    selection = selection:get_child({[focus]={selection:get_range(focus)}})
+
+    kf.set_selection(window, selection)
+    kf.scroll_to_focus(window)
+end, {"orientation"})
+
+--[[
+    boundary = "inner", "outer", or nil
+    side = "before", "after", or nil
+--]]
+module.truncate_selection = action(function(params)
+    local window = vim.api.nvim_get_current_win()
+    local selection = kf.get_selection(window)
+
+    selection = selection:reduce(params.orientation)
+
+    kf.set_selection(window, selection)
+    kf.scroll_to_focus(window)
+end)
+
+local alt_focus = {}
+
+--[[
+    reverse = boolean
+    jump = boolean
+    contents = "register", "raw" or truthy, false? TODO
+--]]
+module.rotate = action(function(params)
+    local window = vim.api.nvim_get_current_win()
+    local selection = kf.get_selection(window)
+
+    local alt = alt_focus[window]
+    if alt.selection ~= selection.id then
+        alt.selection = selection.id
+        alt.focus = kf.get_focus(window)
+    end
+
+    if params.contents then
+        -- TODO
+    else
+        local focus = kf.get_focus(window)
+        if params.jump then
+            if params.reverse then
+                if focus==1 then focus=selection.length
+                elseif focus > alt.focus then focus = alt.focus
+                else focus=1
+                end
+            else
+                if focus==selection.length then focus=1
+                elseif focus < alt.focus then focus = alt.focus
+                else focus = selection.length
+                end
+            end
+        else
+            if params.reverse then focus = ((focus-2)%selection.length)+1
+            else focus = (focus%selection.length)+1
+            end
+        end
+        kf.set_focus(window)
+    end
+
+
+end)
 
 return module
 
