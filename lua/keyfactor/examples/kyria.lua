@@ -6,12 +6,11 @@ local keys = {
     seek="_",
     go="<Space>", motion="<Space>", -- both labels describe the key <Space>
     left={"<Left>", "<kLeft>"}, --both keys are described by the label left
-
-
 }
 
 local mods = {"choose", "multiple"}
-local layers = {"base", "motions", "actions", "settings"}
+local layers = {"universal", "normal", "motions", "actions", "settings", "insert", "raw", "prompt"}
+local conflicts = {normal = {"insert", "raw"}, insert = {"raw"}, settings = {"insert", "raw"}}
 local orientation = {boundary="inner", side="right"}
 
 --[[
@@ -70,7 +69,7 @@ local get_shape = function(context)
 end
 
 local register = {
-    register__name=on.choose(prompt.register),
+    register__name=on.choose(register.prompt_name),
     register__shape=on.multiple(toggle{"larger", "smaller", value=get_shape})
 }
 
@@ -110,7 +109,7 @@ local passthrough = {
     one_shot.mod{
         shift=on.shift,
         alt=on.alt,
-        ctrl=on.ctrl,
+        control=on.control,
         choose=on.choose,
         multiple=on.multiple,
     },
@@ -125,157 +124,201 @@ local passthrough = {
 }
 
 local bindings = {}
-bindings.base = {
-    on.insert(bind{
-        on{edit=false}(bind{
-            -- TODO this stuff could be implemented instead with mode default layer
-            tab=go.complete_next{reversible},
-            enter=go.complete_default,
-        })
-        -- TODO might be nice to have non-printable scroll key (on combo?) so that we can do the
-        -- same regardless of mode
-        scroll={on.control(scroll), on.alt(scroll)},
-    }),
-    on.normal(bind{
-        go={one_shot.layer{motions=true}, passthrough},
-        do={one_shot.layer{actions=true}, passthrough},
-        settings={one_shot.layer{settings=true}, passthrough},
-        choose={one_shot.mods{choose=true}, passthrough},
-        multiple={one_shot.mods{multiple=true}, passthrough},
 
-        scroll=scroll,
+bindings.universal = {
+    -- TODO window navigation
+    -- save, quit
+}
 
-        line=selection:with{textobject=textobjects.line},
-        word=selection:with{textobject=textobjects.word},
-        -- individual ranges from current mark:
-        --mark=selection{textobject=textobjects.mark:with{name=get.local("default_mark")}},
-        char=redo.set{selection,
-            set{lock=true}.highlight{search=true},
-            namespace="seek",
-        }:with{textobject=textobjects.char}, 
-        search=redo.set{selection,
-            set{lock=true}.highlight{search=true},
-            namespace="seek",
-        }:with{textobject=textobjects.search}, 
-        seek=redo{namespace="seek"},
+bindings.normal = {
+    go={one_shot.layer{motions=true}, passthrough},
+    do={one_shot.layer{actions=true}, passthrough},
+    settings={one_shot.layer{settings=true}, passthrough},
+    choose={one_shot.mods{choose=true}, passthrough},
+    multiple={one_shot.mods{multiple=true}, passthrough},
 
-        delete=go.delete{operator, register},
-        insert=bind{
-            go.insert,
-            redo.set_only(go.paste{register__name="insert", outer})
-        }:with{point_operator}
-        paste=bind{
-            wring.set(go.paste),
-            redo.set_only(wring.set(go.paste):with{outer, register=wring.register})
-        }:with{point_operator, register}
+    scroll=scroll,
 
-        wring=bind(
-            on(wring.is_active):_then(
-                wring{increment="depth", reversible, outer}
-            ):_else(
-                wring.set{on(wring.is_active):_then(go.replace):_else(go.yank)}:with{outer, operator}
-            )):with{register}
-        -- TODO "choose" mod but for undo
-        undo=go.undo{reversible},
-        enter=redo,
+    line=selection:with{textobject=textobjects.line},
+    word=selection:with{textobject=textobjects.word},
+    -- individual ranges from current mark:
+    --mark=selection{textobject=textobjects.mark:with{name=get.local("default_mark")}},
+    char=redo.capture{namespace="seek"; selection{textobject=textobjects.char}, go.set.highlight{search=true}},
+    search=redo.capture{namespace="seek"; selection{textobject=textobjects.search}, go.set.highlight{search=true}},
+    seek=go.redo{namespace="seek"},
 
-        surround={},
-        comment={},
-        indent={},
 
-        tab=on.control(
-            on(wring.is_active):_then(
-                wring{increment="offset", reversible}
-            ):_else(
-                wring.set{on(wring.is_active):_then(go.replace):_else(go.yank)}:with{operator}
-            )
-        ):_else(go.rotate_focus{reversible, jump=on.alt}),
-    }),
+    -- TODO on control, remove nearby blank lines?
+    -- TODO on shift, undo the trimming?
+    delete=go.trim{point_operator},
+    backspace=go.trim{point_operator, reverse=true},
+
+    -- TODO shift should determine location of the resulting empty range (or range-part) in the
+    -- case of linewise deletion, with the effect that following with insert while holding mods
+    -- places a line with effect identical to line-wise "change" action
+    --
+    -- But it would also be nice to have shift set the register to the same one used by yank, with
+    -- the default a "garbage" register
+    cut=go.cut{operator, register, autochange=true},
+    copy=go.copy{operator, register},
+
+    paste=redo.capture{go.paste{point_operator, register}},
+    insert=redo.capture{insert.start{point_operator, append=true, autochange=true}},
+    wring=redo.capture{go.wring{reversible, register}},
+
+    undo=go.undo{reversible, choose=on.choose},
+    --[[ TODO
+    surround={},
+    comment={},
+    indent={},
+    ]]
+
+    tab=go.rotate{reversible, contents=on.control("wring"), jump=on.alt},
+
+    -- enter= command prompt?
+    esc=on(prompt.is_active)._then(prompt.cancel)._else(clear.mods),
+}
+
+bindings.insert = {
+    on._not(bind{
+        delete=insert.delete{
+            on.control{
+                boundary="outer",
+                textobject=textobjects.line,
+            }._elseon.alt{
+                boundary="inner",
+                textobject=textobjects.line,
+            }._elseon.shift{
+                textobject=textobjects.word,
+            },
+        },
+        backspace=insert.delete{
+            reverse=true,
+            on.control{
+                boundary="outer",
+                textobject=textobjects.line,
+            }._elseon.alt{
+                boundary="inner",
+                textobject=textobjects.line,
+            }._elseon.shift{
+                textobject=textobjects.word,
+            },
+        },
+        tab=insert.indent,
+        enter=insert.linebreak,
+
+        --[[ if completing, just cancel it;
+        --   otherwise, exit insert mode
+        --   if (non-completing) prompt is active, cancel on control
+        --   otherwise (no non-completing prompt is active), set redo to reinsert
+        --]]
+        esc=on(completion.is_active)._then(prompt.cancel)._else{
+            insert.stop,
+            on._not(prompt.is_active)._then(redo.set_only{insert.reinsert})
+        }
+        esc={insert.stop, on.control(prompt.cancel)},
+
+        choose=on(prompt.is_active)._then(
+            prompt.accept
+        )._else(
+            completion.prompt{orientation__boundary=get.insert.orientation.boundary}
+        )
+
+        -- multiple= TODO treesitter-based auto-close; alternatively moves cursor forward in cases
+        -- where next "closing" is already present
+        -- (or should this shadow a normal-mode key that does "go to matching close"?)
+    })._then(
+        -- TODO if focus is not visible, then make it visible
+        -- TODO literal mode to insert literally
+        on(context.printable)._then(insert{text=context.printable})
+    ),
+}
+
+bindings.prompt = {
+    --tab= rotate focus?
+    enter=prompt.accept, -- TODO multiselect prompt should instead just select focus?
+    esc=prompt.cancel,
 }
 
 bindings.motions = {
-    on.normal(bind{
-        do=go.round_selection{
-            on.control(
-                -- round to inner/outer/left/right
-                -- TODO should linewise rounding be possible?
-                on.shift(
-                    on.alt{boundary="inner"}:_else{side="left"}
-                ):_else(
-                    on.alt{side="right"}:_else{boundary="outer"}
-                ),
+    do=go.truncate_selection{
+        on.control(
+            -- round to inner/outer/left/right
+            -- TODO should linewise rounding be possible?
+            on.shift(
+                on.alt{boundary="inner"}:_else{side="left"}
             ):_else(
-                -- round to a specific position
-                on.shift{side="left"}:_else{side="right"},
-                on.alt{boundary="inner"}:_else{boundary="outer"},
-            )
-        },
-        --[[ TODO line: if count is given, select specific line by number
-        --      (from bottom, if shift/reverse)
-        --  if line not given, select via prompt
-        --
-        --  ctrl/augment and alt/partial should work as usual-ish?
-        --
-        line=go.select_line ]]
+                on.alt{side="right"}:_else{boundary="outer"}
+            ),
+        ):_else(
+            -- round to a specific position
+            on.shift{side="left"}:_else{side="right"},
+            on.alt{boundary="inner"}:_else{boundary="outer"},
+        )
+    },
+    --[[ TODO line: if count is given, select specific line by number
+    --      (from bottom, if shift/reverse)
+    --  if line not given, select via prompt
+    --
+    --  ctrl/augment and alt/partial should work as usual-ish?
+    --
+    line=go.select_line ]]
 
-        --[[
-        surround=seekable:with{textobject=textobjects.surround},
-        comment=seekable:with{textobject=textobjects.comment},
-        indent=seekable:with{textobject=textobjects.indent},
-        mark=seekable:with{textobject=textobjects.mark}
-        tab=go.view_focus{on.alt{center=false}:_else{center=true}},
-        ]]
+    --[[
+    surround=seekable:with{textobject=textobjects.surround},
+    comment=seekable:with{textobject=textobjects.comment},
+    indent=seekable:with{textobject=textobjects.indent},
+    mark=seekable:with{textobject=textobjects.mark}
+    tab=go.view_focus{on.alt{center=false}:_else{center=true}},
+    ]]
 
-        -- TODO enter = "add new range to selection, immediately following focus, constructed the
-        --              same way as the focus" ???!!
-    }),
+    -- TODO enter = "add new range to selection, immediately following focus, constructed the
+    --              same way as the focus" ???!!
 }
 
 bindings.actions = {
-    on.normal{
-        --[[
-        char=go.capitalize{reversible, operator},
-        line=go.join{reversible, operator},
-        mark=go.mark_selection:with{
-            -- modify existing mark vs replace existing mark
-            -- take only focus of selection vs take entire selection
-            --
-            -- if modifying, additional choices:
-            --      add ranges to mark:
-            --          - on overlap: take both, replace, or keep old
-            --      remove ranges from mark:
-            --          - any overlaps, or only identical?
-            --      or some kind of symmetric difference, I guess..
+    --[[
+    char=go.capitalize{reversible, operator},
+    line=go.join{reversible, operator},
+    mark=go.mark_selection:with{
+        -- modify existing mark vs replace existing mark
+        -- take only focus of selection vs take entire selection
+        --
+        -- if modifying, additional choices:
+        --      add ranges to mark:
+        --          - on overlap: take both, replace, or keep old
+        --      remove ranges from mark:
+        --          - any overlaps, or only identical?
+        --      or some kind of symmetric difference, I guess..
 
-            -- shift: remove any overlap
-            -- multiple: use all ranges of selection. otherwise only use focus
-            -- choose: choose mark name instead of using default
-            -- ctrl or alt: modify mark; otherwise, replace. also implied by shift
+        -- shift: remove any overlap
+        -- multiple: use all ranges of selection. otherwise only use focus
+        -- choose: choose mark name instead of using default
+        -- ctrl or alt: modify mark; otherwise, replace. also implied by shift
 
-            on_overlap="replace", -- could be "replace", "add", or "ignore", or I guess "merge"
-            on{ctrl=false,alt=false,shift=false}.let{augment=true}:_else{augment=false},
-            on.shift{remove=true},
-            on{multiple=false}.let{only_focus=true},
-            on.choose{name=prompt.mark},
-        },
-        ]]
+        on_overlap="replace", -- could be "replace", "add", or "ignore", or I guess "merge"
+        on{ctrl=false,alt=false,shift=false}.let{augment=true}:_else{augment=false},
+        on.shift{remove=true},
+        on{multiple=false}.let{only_focus=true},
+        on.choose{name=prompt.mark},
     },
+    ]]
 }
 
-local lock = set{lock=true, scope=on.ctrl{"buffer", "window"}}
+local lock = set{lock=true, scope=on.control{"buffer", "window"}}
+
+go.set_local.register{name=prompt.register}
 
 local set_register=lock.register{name=prompt.register}
 local set_highlight=lock.highlight{search=toggle{true,false,value=get.highlight.search}}
 bindings.settings = {
-    on.normal(bind{
-        mark=set.local{default_mark=prompt.mark},
-        paste=set_register,
-        wring=set_register,
-        do=lock.orientation{
-            side=on.shift("left"):_else("right"),
-            boundary=on.alt("inner"):_else("outer"),
-        },
-        search=set_highlight,
-        char=set_highlight,
-    })
+    mark=set.local{default_mark=prompt.mark},
+    paste=set_register,
+    wring=set_register,
+    do=lock.orientation{
+        side=on.shift("left"):_else("right"),
+        boundary=on.alt("inner"):_else("outer"),
+    },
+    search=set_highlight,
+    char=set_highlight,
 }

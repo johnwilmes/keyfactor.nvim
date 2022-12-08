@@ -48,9 +48,14 @@ do
             return get_char_textobject(params.char)
         end
 
-        local char = prompt.char()
-        if char then
-            return get_char_textobject(char)
+        local char_prompt = prompts.CharMode({}, {limit=1}):await()
+        if char_prompt and char_prompt:is_accepted() then
+            local char = char_prompt:get_value()
+            if type(char)=="string" and #char > 0 then
+                return get_search_textobject(char)
+            else
+                --TODO default to history?
+            end
         end
 
         return nil
@@ -71,9 +76,14 @@ do
             return get_search_textobject(params.pattern)
         end
 
-        local pattern = prompt.search()
-        if pattern then
-            return get_search_textobject(pattern)
+        local search_prompt = prompts.SearchMode():await()
+        if search_prompt and search_prompt:is_accepted() then
+            local pattern = search_prompt:get_value()
+            if type(pattern)=="string" and #pattern > 0 then
+                return get_search_textobject(pattern)
+            else
+                -- TODO default to history?
+            end
         end
 
         return nil

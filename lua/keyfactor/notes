@@ -27,3 +27,28 @@ ADVANCED
     - git stuff?
     - undo/redo rewrite?
 
+
+-----
+
+how is association between selection lineage and window group maintained?
+     handle.range:write within selection:iter - is this actually a good solution? it's anyway
+     kind of hacky for cross-size register actions
+
+actions can do something on arbitrary selections
+    - if this is useful functionality, expose it via separate api call that takes the selection
+      rather than the window group
+if an action does something to the selection for a window, that should get updated
+    - these user-facing ations should take window as argument
+
+e.g. delete action:
+    - api call takes multirange (associated with a particular buffer)
+    - user-facing action takes window, and operates on whatever buffer is loaded in that window
+      along with current multirange associated with that window+buffer
+
+window group/frame
+    - collection of windows/panes (>=1) of which 1 is focus
+        - every window/pane has:
+            - a buffer
+        - some windows/buffers support multirange/selection but probably some special windows don't
+          
+
