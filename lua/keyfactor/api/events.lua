@@ -3,211 +3,167 @@ local default = require("keyfactor.default")
 
 local module = {}
 
-module.Channel = utils.class()
+local is_scheduled = false
+local queue = {}
+local head = 0
+local tail = 0
 
-function module.Channel:__init(opts)
-    self._observers = {} -- sorted by decreasing priority
-    self._source = opts.source or self
-end
-
---[[
-
-Broadcast frequent: should not require sorting
-Attach infrequent: okay to do O(n) insertion
-Detach very infrequent: typically will not detach individual observers, just clear them all (O(1)), so
-O(n) okay
-
+--[[ keys are sources, values are tables mapping event key to list of listener keys
+--          special `true` event key corresponds to any event
 --]]
+local attached = {}
+local index = {}
 
---[[ broadcast to high priority observers first ]]
-function module.Channel:broadcast(event, ...)
-    for _,attached in ipairs(self._observers) do
-        self:_send(attached, event, ...)
-    end
-end
-
-function module.Channel:_send(attached, event, ...)
-    local observer = attached.observer
-    local obj = attached.object or observer
-    local source = attached.source or self._default_source
-    observer(obj, source, event, ...)
-end
-
-function module.Channel:attach(observer, opts)
-    -- TODO validate utils.is_callable(observer)
-    opts = opts or {}
-    local handle = {}
-    local priority = opts.priority
-    if type(priority)~="number" then priority=default.priority.channel end
-    local i = 1
-    while i<=#self._observers and priority<=self._observers[i].priority do
-        i = i+1
-    end
-    local attached = {
-        handle=handle,
-        priority=priority,
-        observer=observer,
-        object=opts.object,
-        source=opts.source
-    }
-    table.insert(self._observers, i, attached)
-    self:_send(attached, "attach")
-    return handle
-end
-
-function module.Channel:detach(handle)
-    for i,attached in ipairs(self._observers) do
-        if attached.handle == handle then
-            table.remove(self._observers, i)
-            self:_send(attached, "detach")
-            break
+function broadcast(listeners, source, event, details)
+    local n_reinserted = 0 -- number of processed listener reinserted
+    for h,l in ipairs(listeners) do
+        l.callable(l.object, source, event, details)
+        local once = (index[h] or {}).once
+        if once then
+            module.detach(h)
         end
     end
 end
 
-function module.Channel:clear()
-    self:broadcast("detach")
-    self._observers = {}
-end
-
-module.Observer = utils.class()
-
-function module.Observer:__init(opts)
-    self._channels = {}
-    self._is_stopped = false
-
-    local default_object = opts.object or self
-    local default_source = opts.source or nil
-    local default_priority = opts.priority or nil
-
-    for id,attachment in ipairs(opts) do
-        local opts = {
-            object=self,
-            source=id,
-            priority=attachment.priority or default_priority,
-        }
-        self._channels[id] = {
-            channel = attachment.channel,
-            object = attachment.object or default_object,
-            source = attachment.source or default_source,
-            handle = attachment.channel:attach(self.receive, opts)
-            events = attachment.events,
-        }
-    end
-end
-
-function module.Observer:receive(channel, event, ...)
-    if self._is_stopped then
-        -- e.g., don't pass through detach events that result from calling self:stop()
-        return
-    end
-    local channel = self._channels[channel]
-    if not channel then
+function release_next()
+    if head >= tail then
         -- TODO log warning
         return
     end
-    local event = channel.events[event]
-    if utils.is_callable(event) then
-        event(channel.object, channel.source, ...)
-    end
+    head = head + 1
+    record = queue[head]
+    queue[head] = nil
+
+    local listeners = attached[record.source]
+    if not listeners then return end
+
+    broadcast(listeners[true] or {}, record.source, record.event, record.details)
+    broadcast(listeners[record.event] or {}, record.source, record.event, record.details)
 end
 
-function module.Observer:stop()
-    if not self._is_stopped then
-        self._is_stopped = true
-        for _,channel in ipairs(self._channels) do
-            channel.channel:detach(handle)
+function module.enqueue(source, event, details)
+    if not (type(source)=="table" and type(event)=="string") then
+        error("invalid event")
+    end
+    tail = tail + 1
+    queue[tail] = {source=source, event=event, details=details}
+    vim.schedule(release_next)
+end
+
+
+--[[
+    listener (callable)
+    opts
+        source
+        event
+        object (default listener)
+        once (boolean; default false)
+
+    source is required
+    if event is falsey then attaches to all events from this source. otherwise, event is string or
+    list of strings and only receives matching events
+
+    listener will receive
+        listener(object, source, event, details)
+--]]
+function module.attach(listener, source, opts)
+    local object = opts.object or listener
+    local events
+    if type(opts.events)=="table" then
+        if vim.tbl_islist(opts.events) then
+            events = utils.list.to_flags(opts.events)
+        else
+            error("invalid events list")
+        end
+    elseif type(opts.events)=="string" then
+        events = {[opts.events]=true}
+    elseif not opts.events then
+        events = {[true]=true}
+    else
+        error("invalid events list")
+    end
+
+    local handle = #index+1
+    index[handle] = {source=source, events=events, once=not not opts.once}
+    local source_listeners = utils.table.set_default(attached, source)
+    local listener = {callable=listener, object=object}
+    for e,_ in pairs(events) do
+        local event_listeners = utils.table.set_default(attached, source)
+        event_listeners[handle]=listener
+    end
+    return handle
+end
+
+function module.detach(handle)
+    local listener = index[handle]
+    if listener then
+        index[handle]=nil
+        local source_listeners = attached[listener.source]
+        if source_listeners then
+            for e,_ in pairs(listener.events) do
+                event_listeners = source_listeners[e]
+                if event_listeners then
+                    event_listeners[handle]=nil
+                    if vim.tbl_isempty(event_listeners) then
+                        source_listeners[e]=nil
+                    end
+                end
+            end
+            if vim.tbl_isempty(source_listeners) then
+                attached[listener.source]=nil
+            end
         end
     end
 end
 
+--[[
+    opts:
+        events
+        callable
+        object
 
-local synchronizer = Channel()
-
-function synchronizer:catch()
-    self._is_scheduled = true
-end
-
-function synchronizer:schedule()
-    if not self._is_scheduled then
-        self._is_scheduled = true
-        vim.schedule(function() self:release() end)
-    end
-end
-
-function synchronizer:release()
-    self._is_scheduled = false
-    self:broadcast("release")
-end
-
-function module.get_synchronizer()
-    return synchronizer
-end
-
-local buffer_channel = {}
-local window_channel = {}
-
-local buffer_text_queue = {}
-local buffer_tick_queue = {}
-
-local function schedule_buffer_update(event, buffer)
-    buffer_tick_queue[buffer]=true
-    if event~="changedtick" then
-        buffer_text_queue[buffer]=true
-    end
-    synchronizer:schedule()
-end
-
-local function release_buffer_updates(buffer)
-    local channel = buffer_channel[buffer]
-    if channel then
-        if buffer_text_queue[buffer] then
-            buffer_text_queue[buffer]=false
-            channel:broadcast("text")
+    clears all listeners for source that match all specified opts
+        (if events is falsey, matches only listeners attached to "all" events; if events is true,
+        then matches listeners attached to specific events as well as all events)
+--]]
+function module.clear(source, opts)
+    local listeners = attached[source]
+    if listeners then
+        local events = opts.events
+        if type(events)=="string" then
+            events={events}
+        elseif not events then
+            events={true}
+        elseif events==true then
+            events=utils.table.keys(listeners)
         end
-        if buffer_tick_queue[buffer] then
-            buffer_tick_queue[buffer]=false
-            channel:broadcast("tick")
+
+        if type(events)~="table" then
+            error("invalid events filter")
         end
-    end
-end
-
-synchonizer:attach(function(_, _, event)
-    if event=="release" or event=="detach" then
-        -- copy keys for safe iteration
-        for _,buffer in ipairs(utils.table.keys(buffer_tick_queue)) do
-            release_buffer_updates(buffer)
-        end
-    end
-end)
-
-
-
-
-
-synchronizer:attach({
-    release = function()
-        for window, events in pairs(pending_window_events) do
-            local channel = window_channel[window]
-            if channel then
-                for event, details in pairs(events) do
-                    channel:broadcast(event, unpack(details))
+        for _,e in ipairs(events) do
+            local event_listeners = listeners[e]
+            for h,l in pairs(event_listeners) do
+                if (opts.object==nil or opts.object==l.object) and
+                    (opts.callable==nil or opts.callable==l.callable) then
+                    event_listeners[h]=nil
+                    l_index = index[h]
+                    if l_index then
+                        l_index.events[e]=nil
+                        if vim.tbl_isempty(l_index.events) then
+                            index[h]=nil
+                        end
+                    end
                 end
             end
         end
-        pending_window_events = {}
-
-        for buffer, events in pairs(pending_buffer_events) do
-            local channel = buffer_channel[buffer]
-            if channel then
-                for event, details in pairs(events) do
-                    channel:broadcast(event, unpack(details))
-                end
-            end
-        end
-        pending_buffer_events = {}
     end
-})
+end
+
+
+
+
+
 
 function module.get_buffer_channel(buffer)
     --[[ events

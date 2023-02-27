@@ -3,54 +3,43 @@ local module = {}
 local binding = require("keyfactor.binding")
 
 module.accept = binding.action(function(params)
-    -- get current prompt...
-    if prompt then
-        if params.action and prompt:get_property("mutable_action") then
-            prompt:set_action{accept=params.action}
-        end
+    local frame = kf.get_frame()
+    local mode = frame:get_mode()
+    local prompt = mode.model
+    if prompts.is_prompt(prompt) then
         prompt:accept()
     end
 end, {})
 
 module.cancel = binding.action(function(params)
-    -- get current prompt...
-    if prompt then
-        if params.action and prompt:get_property("mutable_action") then
-            prompt:set_action{cancel=params.action}
-        end
-        prompt:cancel()
+    local frame = kf.get_frame()
+    local mode = frame:get_mode()
+    local prompt = mode.model
+    if prompts.is_prompt(prompt) then
+        prompt:stop()
     end
 end, {})
 
-module.rotate_focus = binding.action(function(params)
-    -- get current prompt...
-    if prompt then
-        if params.action and prompt:get_property("options") then
-
-        end
-        prompt:cancel()
+--[[
+--  params.key (optional) (TODO)
+--]]
+module.push_key = binding.bindable(function(context, params)
+    local frame = kf.get_frame()
+    local mode = frame:get_mode()
+    local prompt = mode.model
+    if prompts.is_prompt(prompt) and prompts.push_key then
+        prompt:push_key(context.key)
     end
 end, {})
 
-module.cancel = binding.action(function(params)
-    -- get current prompt...
-    if prompt then
-        if params.action and prompt:get_property("mutable") then
-            prompt:set_action{cancel=params.action}
-        end
-        prompt:cancel()
+module.pop_key = binding.action(function(params)
+    local frame = kf.get_frame()
+    local mode = frame:get_mode()
+    local prompt = mode.model
+    if prompts.is_prompt(prompt) and prompts.pop_key then
+        prompt:pop_key()
     end
 end, {})
-
-module.focus_mnemonic = binding.action(function(params)
-    --[[
-    tell views to display mnemonics for available options
-
-    send key presses to mnemonic filter...
-    --]]
-
-end, {})
-
 
 
 return module

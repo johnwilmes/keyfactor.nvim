@@ -2,6 +2,54 @@ local kf = require("keyfactor.base")
 
 local module = {}
 
+--[[
+    params:
+        orientation
+        direction (left right up down)
+        augment
+        wrap_horizontal - default FALSE
+            (wrap line for left/right)
+        wrap - default FALSE
+            (wrap to top/bottom of buffer (for up/down, and also left/wrap if wrap_horizontal is true))
+        raw_column - default TRUE
+            (for up/down, whether to use raw column or actual column)
+]]
+local horizontal = {left=true, right=true}
+local vertical = {up=true, down=true}
+module.select_direction = action(function(params)
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
+
+    if vertical[params.direction] then
+        local opts = {
+            reverse= (params.direction=="up"),
+            wrap = params.wrap
+            raw_column= (params.raw_column~=false)
+        }
+        if params.augment then
+            selection = selection:augment_row(params.orientation, opts)
+        else
+            selection = selection:next_row(params.orientation, opts)
+        end
+    elseif horizontal[params.direction] then
+        local opts = {
+            reverse= (params.direction=="left"),
+            wrap = params.wrap
+        }
+        local preserve_row = (not params.wrap_horizontal) and "row"
+        local textobject = kf.textobjects.column{preserve=preserve_row}
+        if params.augment then
+            selection = selection:augment_textobject(textobject, params.orientation, opts)
+        else
+            selection = selection:next_textobject(textobject, params.orientation, opts)
+        end
+    else
+        --TODO log error
+        return
+    end
+
+    frame:set_selection(selection, true)
+end, {fill={"orientation"}})
 
 --[[
 
@@ -22,9 +70,8 @@ local module = {}
 
 --]]
 module.select_textobject = action(function(params)
-    local window = vim.api.nvim_get_current_win()
-    local selection = kf.get_selection(window)
-    local focus = kf.get_focus(window)
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
 
     if params.multiple then
         if not params.augment then
@@ -37,7 +84,7 @@ module.select_textobject = action(function(params)
         end
         if params.choose then
             local all = selection:get_all()
-            local confirm, ranges = kf.prompt.range{options=all, multiple=true, picker="telescope"}
+            local confirm, ranges = ...-- TODO kf.prompt.range{options=all, multiple=true, picker="telescope"}
             local child = {}
             for _,idx in ipairs(ranges) do
                 child[idx]={all[idx]}
@@ -63,33 +110,30 @@ module.select_textobject = action(function(params)
         end
     end
 
-    kf.set_selection(window, selection)
-    kf.scroll_to_focus(window)
+    frame:set_selection(selection, true)
 end, {"orientation"})
 
 module.select_focus = action(function()
-    local window = vim.api.nvim_get_current_win()
-    local selection = kf.get_selection(window)
-    local focus = kf.get_focus(window)
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
+    local focus = frame:get_selection_focus()
 
     selection = selection:get_child({[focus]={selection:get_range(focus)}})
 
-    kf.set_selection(window, selection)
-    kf.scroll_to_focus(window)
-end, {"orientation"})
+    frame:set_selection(selection, true)
+end)
 
 --[[
     boundary = "inner", "outer", or nil
     side = "before", "after", or nil
 --]]
 module.truncate_selection = action(function(params)
-    local window = vim.api.nvim_get_current_win()
-    local selection = kf.get_selection(window)
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
 
     selection = selection:reduce(params.orientation)
 
-    kf.set_selection(window, selection)
-    kf.scroll_to_focus(window)
+    frame:set_selection(selection, true)
 end)
 
 local alt_focus = {}
@@ -100,8 +144,8 @@ local alt_focus = {}
     contents = "register", "raw" or truthy, false? TODO
 --]]
 module.rotate = action(function(params)
-    local window = vim.api.nvim_get_current_win()
-    local selection = kf.get_selection(window)
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
 
     local alt = alt_focus[window]
     if alt.selection ~= selection.id then

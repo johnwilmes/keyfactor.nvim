@@ -23,11 +23,11 @@ local binding = require("keyfactor.binding")
         
 --]]
 module.paste = binding.action(function(params)
-    local window = vim.api.nvim_get_current_win()
-    local selection = kf.get_selection(window)
+    local mode = kf.get_mode()
+    local selection = mode:get_selection()
     local register = kf.register.read(params.register.name, params.register.entry)
 
-    selection, register = kf.align_selection(selection, register, params.register)
+    selection, register = selection:align_with(register, params.register)
 
     if params.linewise then
         local before = params.orientation.side=="before"
@@ -37,9 +37,8 @@ module.paste = binding.action(function(params)
         selection = kf.edit.replace(selection, aligned)
     end
 
-    selection = kf.set_selection(window, selection)
-    kf.scroll_to_focus(window)
-    kf.wring.set(module.paste, params, kf.register.wring_history)
+    selection = mode:set_selection(selection, true) -- true: ensure focus visible
+
 end, {fill={"orientation", "register"}})
 
 --[[
@@ -62,8 +61,8 @@ end
     linewise
 ]]
 module.copy = binding.action(function(params)
-    local window = vim.api.nvim_get_current_win()
-    local selection = kf.get_selection(window)
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
     do_yank(selection, params.register.name, params.linewise)
 end, {fill={"register"}})
 
@@ -76,9 +75,8 @@ end, {fill={"register"}})
         (entry)
 ]]
 module.cut = binding.action(function(params)
-    local window = vim.api.nvim_get_current_win()
-    local selection = kf.get_selection(window)
-
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
     do_yank(selection, params.register.name, params.linewise)
 
     if params.linewise then
@@ -88,8 +86,7 @@ module.cut = binding.action(function(params)
         kf.edit.delete(selection, params.orientation.boundary)
     end
 
-    selection = kf.set_selection(window, selection)
-    kf.scroll_to_focus(window)
+    selection = frame:set_selection(selection, true)
 end, {fill={"orientation", "register"}})
 
 --[[
@@ -98,8 +95,8 @@ end, {fill={"orientation", "register"}})
     join
 --]]
 module.trim = binding.action(function(params)
-    local window = vim.api.nvim_get_current_win()
-    local selection = kf.get_selection(window)
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
 
     -- TODO make this unicode safe
     -- TODO test join for extrange safety?
@@ -128,8 +125,25 @@ module.trim = binding.action(function(params)
         end
     end
 
-    selection = kf.set_selection(window, selection)
-    kf.scroll_to_focus(window)
+    selection = frame:set_selection(selection, true)
 end, {fill={"orientation"}})
+
+--[[
+    reverse - true means *redo*, false means undo (default)
+    keep_selection - false means also revert to corresponding selection, true means maintain current selection
+]]
+module.undo = binding.action(function(params)
+    local frame = kf.get_frame()
+    local selection = frame:get_selection()
+
+    local offset = (params.reverse and 1) or -1
+    local node, actual = kf.undo.get_node(selection.buffer, offset)
+    if actual==offset then
+        local selection = kf.undo.revert(selection.buffer, node)
+        if not params.keep_selection then
+            frame:set_selection(selection, true)
+        end
+    end
+end)
 
 return module
