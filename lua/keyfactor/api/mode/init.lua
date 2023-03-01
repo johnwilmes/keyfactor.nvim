@@ -241,6 +241,7 @@ module.get_focus = with_lock(function ()
     if not win then
         error("no active modes and no normal windows open")
     end
+    -- TODO allow all buffers
     local mode = module.Edit{target={window=win}}
 
     if first_branch then

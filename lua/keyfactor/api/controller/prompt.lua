@@ -33,7 +33,7 @@ function module.GetKeyController:get_keys()
     return vim.deepcopy(self._keys)
 end
 
-function module.GetKeyController:push(key)
+function module.GetKeyController:push_key(key)
     self._keys[#self._keys]=key
 end
 
