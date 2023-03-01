@@ -1,7 +1,7 @@
 local go = require("keyfactor.action")
 local textobjects = require("keyfactor.textobjects")
 
-local bind, on, get -- TODO
+local map, on, get -- TODO
 
 local settings = {}
 
@@ -41,7 +41,13 @@ local direction = go.select_direction{
     direction=get.outer.direction,
 }
 
-local frame_nav = bind(on.control(on.shift(go.move_frame)._else(go.focus_frame))
+local frame_nav = map(on.control(
+    on.alt(
+        go.frame.split
+    )._else(
+        on.shift(go.frame.move)._else(go.frame.focus)
+    )
+))
 
 -- UNIVERSAL LAYER
 settings.bindings.universal = {
@@ -82,7 +88,7 @@ settings.bindings.normal = {
 
 -- INSERT LAYER
 settings.bindings.insert = {
-    on._not(bind{
+    on._not(map{
         delete=go.insert.delete{
             partial=true,
             on.control{
@@ -119,7 +125,7 @@ settings.bindings.insert = {
 
 -- PROMPT LAYERS
 settings.bindings.raw = {
-    on._not(bind{
+    on._not(map{
         backspace=go.prompt.pop_key
     })._then(
         go.prompt.push_key
