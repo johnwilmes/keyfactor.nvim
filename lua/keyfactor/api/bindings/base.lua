@@ -158,4 +158,23 @@ do
     end
 end
 
+do
+    local outer_mt = {}
+
+    function outer_mt:__index(k)
+        local index = utils.list.concatenate(self._index, {k})
+        return setmetatable({_index=index}, outer_mt)
+    end
+
+    function outer_mt:__bind(_, params)
+        local result = params
+        for _,k in ipairs(self._index) do
+            result = (result or {})[k]
+        end
+        return result
+    end
+
+    module.outer = setmetatable({_index={}}, outer_mt)
+end
+
 return module
