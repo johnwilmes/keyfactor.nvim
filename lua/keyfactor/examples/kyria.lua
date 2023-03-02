@@ -1,6 +1,6 @@
 local textobjects = require("keyfactor.textobjects")
 
-local map, map_first, on, outer, key -- TODO
+local map, map_first, on, outer -- TODO
 
 local settings = {}
 
@@ -119,7 +119,7 @@ settings.maps.insert = map_first{
         tab=go.insert.indent,
         enter=go.insert.linebreak,
     },
-    on(key.is_printable):bind(go.insert.text)
+    on(outer.key.is_printable):bind(go.insert.text)
 }
 
 -- PROMPT LAYERS

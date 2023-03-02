@@ -15,14 +15,15 @@ end
 
 function module.dispatch_keypress(key)
     local mode = kf.mode.get_focus()
-    local actions
+    local action
     
     -- TODO fail more gracefully if no layers controller, or doesn't give layers
+    local params = {key=key}
     for name, binding in kf.binding.iter(mode.layers) do
-        local success, result = pcall(kf.binding.resolve_map, binding, key)
+        local success, result = pcall(kf.binding.bind, binding, params)
         if success then
-            if #result > 0 then
-                actions = result
+            if utils.callable(result) then
+                action = result
                 break
             end
         else
@@ -30,20 +31,7 @@ function module.dispatch_keypress(key)
         end
     end
 
-    for _,action in ipairs(actions) do
-        kf.exec(action)
-    end
-end
-
-function module.exec(action)
-    local mode = kf.mode.get_focus()
-
-    -- if not currently execing an action
-        -- create new coroutine
-        -- store the coroutine somewhere...?
-        -- exec action (param mode) within coroutine
-    -- else
-        -- fail?
+    action()
 end
 
 return module
