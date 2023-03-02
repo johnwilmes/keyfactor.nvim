@@ -2,6 +2,19 @@ local kf = require("keyfactor.base")
 
 local module = {}
 
+-- TARGETING: these actions all operate on the first target in mode:get_targets() that presents
+-- both a name and a selection (can be empty)
+
+-- TODO whenever selection is changed, also shift viewport to make selection visible
+
+local function get_selection_target(mode)
+    for _,t in ipairs(mode:get_targets()) do
+        if t.name and t.selection then
+            return t
+        end
+    end
+end
+
 --[[
     params:
         orientation
@@ -13,25 +26,47 @@ local module = {}
             (wrap to top/bottom of buffer (for up/down, and also left/wrap if wrap_horizontal is true))
         raw_column - default TRUE
             (for up/down, whether to use raw column or actual column)
+        viewport - boolean default TRUE
+            - if selection is length 0 then default to one end of viewport
+        scroll - boolean default TRUE
+            - if selection is changed, and is nonempty, scroll so that focus is visible
 ]]
 local horizontal = {left=true, right=true}
 local vertical = {up=true, down=true}
-module.select_direction = action(function(params)
-    local frame = kf.get_frame()
-    local selection = frame:get_selection()
+local direction_to_side={up="after", left="after", down="before", right="before"}
+module.direction = action(function(params)
+    local side = direction_to_side[params.direction]
+    if not side then
+        --TODO log invalid direction
+        return
+    end
+
+    local mode, orientation = kf.fill(params, "mode", "orientation")
+
+    local target = get_selection_target(mode)
+    if not target then
+        return
+    end
+    local selection = target.selection
+
+    if selection.length==0 and target.viewport and params.viewport~=false then
+        local range = kf.range.viewport(target.viewport)
+        range = kf.range({range[side]["inner"]})
+        selection = kf.selection(target.buffer, {range})
+    end
 
     if vertical[params.direction] then
         local opts = {
-            reverse= (params.direction=="up"),
+            reverse = (params.direction=="up"),
             wrap = params.wrap
-            raw_column= (params.raw_column~=false)
+            raw_column = (params.raw_column~=false)
         }
         if params.augment then
-            selection = selection:augment_row(params.orientation, opts)
+            selection = selection:augment_row(orientation, opts)
         else
-            selection = selection:next_row(params.orientation, opts)
+            selection = selection:next_row(orientation, opts)
         end
-    elseif horizontal[params.direction] then
+    else -- horizontal[params.direction]
         local opts = {
             reverse= (params.direction=="left"),
             wrap = params.wrap
@@ -39,17 +74,25 @@ module.select_direction = action(function(params)
         local preserve_row = (not params.wrap_horizontal) and "row"
         local textobject = kf.textobjects.column{preserve=preserve_row}
         if params.augment then
-            selection = selection:augment_textobject(textobject, params.orientation, opts)
+            selection = selection:augment_textobject(textobject, orientation, opts)
         else
-            selection = selection:next_textobject(textobject, params.orientation, opts)
+            selection = selection:next_textobject(textobject, orientation, opts)
         end
-    else
-        --TODO log error
-        return
     end
 
-    frame:set_selection(selection, true)
-end, {fill={"orientation"}})
+    local viewport
+    if target.viewport and params.scroll~=false then
+        local position = selection:get_focus()[orientation]
+        viewport = kf.viewport.scroll_to_position(target.viewport, position)
+    end
+
+    target:set_details{
+        window=target.window,
+        buffer=target.buffer,
+        selection=selection,
+        viewport=viewport
+    }
+end)
 
 --[[
 
@@ -65,17 +108,29 @@ end, {fill={"orientation"}})
             (default to "select" if truthy and not "split"?)
         choose = "auto" or "telescope" or "hop" or falsey
             (default to "auto" if truthy and not "telescope" or "hop"?)
-        ranges = {...}
+        viewport (boolean default true)
 
 
 --]]
-module.select_textobject = action(function(params)
-    local frame = kf.get_frame()
-    local selection = frame:get_selection()
+module.textobject = action(function(params)
+    -- TODO validate params.textobject
+    local mode, orientation = kf.fill(params, "mode", "orientation")
+
+    local target = get_selection_target(mode)
+    if not target then
+        return
+    end
+    local selection = target.selection
+
+    if selection.length==0 and target.viewport and params.viewport~=false then
+        local range = kf.range.viewport(target.viewport)
+        range = kf.range({range[(params.reverse and "after") or "before"]["inner"]})
+        selection = kf.selection(target.buffer, {range})
+    end
 
     if params.multiple then
         if not params.augment then
-            selection = kf.selection(selection.buffer, kf.range.buffer(selection.buffer))
+            selection = kf.selection(selection.buffer, {kf.range.buffer(selection.buffer)})
         end
         if params.multiple=="split" then
             selection = selection:split_textobject(params.textobject)
@@ -83,6 +138,9 @@ module.select_textobject = action(function(params)
             selection = selection:subselect_textobject(params.textobject)
         end
         if params.choose then
+            -- TODO
+            return
+            --[[
             local all = selection:get_all()
             local confirm, ranges = ...-- TODO kf.prompt.range{options=all, multiple=true, picker="telescope"}
             local child = {}
@@ -90,9 +148,11 @@ module.select_textobject = action(function(params)
                 child[idx]={all[idx]}
             end
             return selection:get_child(child)
+            ]]
         end
     else
         if params.choose then
+            return
             -- TODO if params.choose then select single range from entire buffer (telescope) or
             --      from viewport (hop). Do so regardless of #selection
             -- TODO first restrict to focus
@@ -110,39 +170,59 @@ module.select_textobject = action(function(params)
         end
     end
 
-    frame:set_selection(selection, true)
-end, {"orientation"})
+    target:set_details{window=target.window, buffer=target.buffer, selection=selection}
+end)
 
-module.select_focus = action(function()
-    local frame = kf.get_frame()
-    local selection = frame:get_selection()
-    local focus = frame:get_selection_focus()
+--[[ restrict selection to its focus
 
-    selection = selection:get_child({[focus]={selection:get_range(focus)}})
+        scroll - boolean default TRUE
+            - scroll so that focus is visible
+--]]
+module.focus = action(function(params)
+    local mode = kf.fill(params, "mode")
 
-    frame:set_selection(selection, true)
+    local target = get_selection_target(mode)
+    if not target then
+        return
+    end
+    local selection = target.selection
+    if selection.length > 0 then
+        local focus = selection:get_focus()
+        selection = selection:get_child({[focus]={selection:get_range(focus)}})
+        target:set_details{window=target.window, buffer=target.buffer, selection=selection}
+    end
 end)
 
 --[[
+    truncate each range in the selection to one part: inner/outer, before/after
+
     boundary = "inner", "outer", or nil
     side = "before", "after", or nil
+    scroll = boolean default TRUE
 --]]
-module.truncate_selection = action(function(params)
-    local frame = kf.get_frame()
-    local selection = frame:get_selection()
+module.truncate = action(function(params)
+    local mode = kf.fill(params, "mode")
+    local target = get_selection_target(mode)
+    if not target then
+        return
+    end
+    local selection = target.selection
 
     selection = selection:reduce(params.orientation)
 
-    frame:set_selection(selection, true)
+    target:set_details{window=target.window, buffer=target.buffer, selection=selection}
 end)
 
-local alt_focus = {}
 
 --[[
+    move focus within selection
+
     reverse = boolean
     jump = boolean
     contents = "register", "raw" or truthy, false? TODO
+    scroll = boolean default TRUE
 --]]
+local alt_focus = {}
 module.rotate = action(function(params)
     local frame = kf.get_frame()
     local selection = frame:get_selection()
@@ -176,8 +256,6 @@ module.rotate = action(function(params)
         end
         kf.set_focus(window)
     end
-
-
 end)
 
 return module
