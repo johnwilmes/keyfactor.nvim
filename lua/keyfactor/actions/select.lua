@@ -1,4 +1,4 @@
-local kf = require("keyfactor.base")
+local kf = require("keyfactor.api")
 
 local module = {}
 
@@ -17,6 +17,7 @@ end
 
 --[[
     params:
+        mode
         orientation
         direction (left right up down)
         augment
@@ -34,7 +35,7 @@ end
 local horizontal = {left=true, right=true}
 local vertical = {up=true, down=true}
 local direction_to_side={up="after", left="after", down="before", right="before"}
-module.direction = action(function(params)
+module.direction = kf.binding.action(function(params)
     local side = direction_to_side[params.direction]
     if not side then
         --TODO log invalid direction
@@ -86,7 +87,7 @@ module.direction = action(function(params)
         viewport = kf.viewport.scroll_to_position(target.viewport, position)
     end
 
-    target:set_details{
+    mode[target.name]:set_details{
         window=target.window,
         buffer=target.buffer,
         selection=selection,
@@ -97,6 +98,7 @@ end)
 --[[
 
     params:
+        mode
         orientation
             boundary = "inner" or "outer"
             side = "left" or "right"
@@ -112,7 +114,7 @@ end)
 
 
 --]]
-module.textobject = action(function(params)
+module.textobject = kf.binding.action(function(params)
     -- TODO validate params.textobject
     local mode, orientation = kf.fill(params, "mode", "orientation")
 
@@ -170,15 +172,16 @@ module.textobject = action(function(params)
         end
     end
 
-    target:set_details{window=target.window, buffer=target.buffer, selection=selection}
+    mode[target.name]:set_details{window=target.window, buffer=target.buffer, selection=selection}
 end)
 
 --[[ restrict selection to its focus
 
+        mode
         scroll - boolean default TRUE
             - scroll so that focus is visible
 --]]
-module.focus = action(function(params)
+module.focus = kf.binding.action(function(params)
     local mode = kf.fill(params, "mode")
 
     local target = get_selection_target(mode)
@@ -189,18 +192,19 @@ module.focus = action(function(params)
     if selection.length > 0 then
         local focus = selection:get_focus()
         selection = selection:get_child({[focus]={selection:get_range(focus)}})
-        target:set_details{window=target.window, buffer=target.buffer, selection=selection}
+        mode[target.name]:set_details{window=target.window, buffer=target.buffer, selection=selection}
     end
 end)
 
 --[[
     truncate each range in the selection to one part: inner/outer, before/after
 
+    mode
     boundary = "inner", "outer", or nil
     side = "before", "after", or nil
     scroll = boolean default TRUE
 --]]
-module.truncate = action(function(params)
+module.truncate = kf.binding.action(function(params)
     local mode = kf.fill(params, "mode")
     local target = get_selection_target(mode)
     if not target then
@@ -210,20 +214,20 @@ module.truncate = action(function(params)
 
     selection = selection:reduce(params.orientation)
 
-    target:set_details{window=target.window, buffer=target.buffer, selection=selection}
+    mode[target.name]:set_details{window=target.window, buffer=target.buffer, selection=selection}
 end)
 
 
 --[[
-    move focus within selection
+    TODO move focus within selection
 
+    mode
     reverse = boolean
     jump = boolean
     contents = "register", "raw" or truthy, false? TODO
     scroll = boolean default TRUE
---]]
 local alt_focus = {}
-module.rotate = action(function(params)
+module.rotate = kf.binding.action(function(params)
     local frame = kf.get_frame()
     local selection = frame:get_selection()
 
@@ -257,6 +261,7 @@ module.rotate = action(function(params)
         kf.set_focus(window)
     end
 end)
+--]]
 
 return module
 
