@@ -1,6 +1,6 @@
 local textobjects = require("keyfactor.textobjects")
 
-local map, on, outer, key -- TODO
+local map, map_first, on, outer, key -- TODO
 
 local settings = {}
 
@@ -34,62 +34,67 @@ local point_operator = {
     orientation__side=on.shift:bind("before"):else_bind("after"),
 }
 
-local selection = go.select_textobject:with{
+local selection = go.select.textobject:bind{
     reversible,
     augment=on.control,
     partial=on.alt,
     textobject=outer.textobject,
 }
 
-local direction = go.select_direction:with{
+local direction = go.select.direction:bind{
     augment=on.shift,
     direction=outer.direction,
 }
 
-local nav = map(on.control(
-    on.alt(
-        go.frame.split
-    )._else(
-        on.shift:bind(go.frame.move):else_bind(go.frame.focus)
+local nav = map(on.control:bind(
+    on.alt:bind(
+        go.layout.split_window
+    ):else_on{shift=true}:bind(
+        go.layout.move_window
+    ):else_bind(
+        go.layout.focus
     )
 ))
 
 -- UNIVERSAL LAYER
 settings.maps = {}
-settings.maps.universal = {
-    up=nav:with{direction="up"},
-    down=nav:with{direction="down"},
-    left=nav:with{direction="left"},
-    right=nav:with{direction="right"},
-    esc=go.stop_mode,
+settings.maps.universal = map{
+    up=nav:bind{direction="up"},
+    down=nav:bind{direction="down"},
+    left=nav:bind{direction="left"},
+    right=nav:bind{direction="right"},
+    esc=go.mode.stop,
 }
 
 -- NORMAL LAYER
-settings.maps.normal = {
-    scroll=go.scroll:with{reversible, partial=on.alt, linewise=on.control},
+settings.maps.normal = map{
+    scroll=go.scroll:bind{reversible, partial=on.alt, linewise=on.control},
 
-    up=direction:with{direction="up"},
-    down=direction:with{direction="down"},
-    left=direction:with{direction="left"},
-    right=direction:with{direction="right"},
+    up=direction:bind{direction="up"},
+    down=direction:bind{direction="down"},
+    left=direction:bind{direction="left"},
+    right=direction:bind{direction="right"},
 
-    line=selection:with{textobject=textobjects.line},
-    word=selection:with{textobject=textobjects.word},
+    line=selection:bind{textobject=textobjects.line},
+    word=selection:bind{textobject=textobjects.word},
     -- individual ranges from current mark:
-    --mark=selection{textobject=textobjects.mark:with{name=get.local("default_mark")}},
-    char=selection:with{textobject=textobjects.char},
-    search=selection:with{textobject=textobjects.search},
+    --mark=selection{textobject=textobjects.mark:bind{name=get.local("default_mark")}},
 
-    delete=go.trim:with{point_operator},
-    backspace=go.trim:with{point_operator, reverse=true},
+    -- textobjects.char - by default, get pattern from (outer) params.prompt.value; either
+    -- prompt.char or textobjects.char can default with case where prompt is empty accept
+    char=go.prompt.char:pass{accept=selection:bind{textobject=textobjects.char}},
+    search=go.prompt.search:pass{accept=selection:bind{textobject=textobjects.search}},
 
-    cut=go.cut:with{operator},
-    copy=go.copy:with{operator},
+    delete=go.trim:bind{point_operator},
+    backspace=go.trim:bind{point_operator, reverse=true},
 
-    paste=go.paste:with{point_operator},
-    insert=go.insert.start:with{point_operator, append=true},
+    cut=go.cut:bind{operator},
+    copy=go.copy:bind{operator},
 
-    undo=go.undo:with{reversible},
+    paste=go.paste:bind{point_operator},
+    insert=go.insert.start:bind{point_operator, append=true},
+
+    undo=go.undo:bind{reversible},
 }
 
 -- INSERT LAYER
@@ -99,32 +104,35 @@ local insert_delete = {
     on.control:bind{
         boundary="outer",
         textobject=textobjects.line,
-    }:else_on.alt:bind{
+    }:else_on{alt=true}:bind{
         boundary="inner",
         textobject=textobjects.line,
-    }.else_on.shift:bind{
+    }.else_on{shift=true}:bind{
         textobject=textobjects.word,
     },
 }
 
-settings.maps.insert = {
-    on_not(map{
-        delete=go.insert.delete:with{insert_delete},
-        backspace=go.insert.delete:with{reverse=true, insert_delete},
+settings.maps.insert = map_first{
+    {
+        delete=go.insert.delete:bind{insert_delete},
+        backspace=go.insert.delete:bind{reverse=true, insert_delete},
         tab=go.insert.indent,
         enter=go.insert.linebreak,
-    }):bind(
-        on(key.is_printable):bind(go.insert.text)
-    ),
+    },
+    on(key.is_printable):bind(go.insert.text)
 }
 
 -- PROMPT LAYERS
-settings.maps.prompt = {
+settings.maps.prompt = map{
     enter=go.prompt.accept,
 }
 
-settings.maps.getkey = {
-    on_not(map{esc=go.stop_mode}):bind(go.prompt.getkey)
+settings.maps.getkey = map_first{
+    {
+        enter=go.prompt.accept, -- use prompt will use default value
+        esc=go.mode.stop,
+    },
+    go.prompt.getkey
 }
 
 return settings
