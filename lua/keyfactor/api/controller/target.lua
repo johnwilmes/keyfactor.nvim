@@ -10,246 +10,338 @@ local NULL_VIEWPORT = {
     skipcol=0
 }
 
-local function update_details_dict(details, values)
+local buffer_history = {} -- [buffer] = {viewport=..., selection=...}
+local default_target = {} -- [window] = DefaultTarget
+
+local function update_history(buffer, history, values)
     if values.selection then
-        details.selection=values.selection
+        history.selection=values.selection
+    elseif not history.selection then
+        history.selection=kf.selection(buffer, {})
+    end
+
+    if not history.viewport then
+        history.viewport = vim.deepcopy(NULL_VIEWPORT)
     end
     if values.viewport then
         local v = values.viewport
-        local d = details.viewport
+        local h = history.viewport
         for k,_ in pairs(NULL_VIEWPORT) do
             if v[k] then d[k]=v[k] end
         end
     end
 end
 
-local function get_window_and_buffer(opts)
-    opts = opts or {}
-    local window = opts.window
-    local buffer = opts.buffer
+local DefaultTarget = utils.class()
 
-    if type(window)=="number" and window>0 then
-        window, is_valid = kf.get_window(window)
-        if not is_valid then
-            window = vim.api.nvim_get_current_win()
-        end
-    else
-        window = vim.api.nvim_get_current_win()
-    end
+-- TODO handle window having been closed
 
+function DefaultTarget:__init(opts)
+    self._window = opts.window
+    self._buffer = vim.api.nvim_win_get_buf(self._window)
+    self._values = {}
+end
+
+function DefaultTarget:get(buffer)
     if type(buffer)=="number" and buffer>0 then
         buffer, is_valid = kf.get_buffer(buffer)
-        if not is_valid then
-            buffer = vim.api.nvim_win_get_buf(window)
+        if not valid then return false end
+    end
+
+    if not buffer then buffer = self._buffer end
+
+    local values = self._values[buffer] or buffer_history[buffer]
+    if not values then
+        values = {
+            viewport=vim.deepcopy(NULL_VIEWPORT),
+            selection= kf.selection(buffer, {})
+        }
+    end
+
+    return {
+        buffer=buffer,
+        selection=values.selection,
+        viewport=values.viewport,
+    }
+end
+
+function DefaultTarget:set_buffer(buffer)
+    local is_valid
+    if type(buffer)=="number" and buffer>0 then
+        buffer, is_valid = kf.get_buffer(buffer)
+        if is_valid then
+            self._buffer = buffer
+        end
+    end
+end
+
+function DefaultTarget:set_selection(selection)
+    local buffer = selection.buffer
+    local id, is_valid = kf.get_buffer(buffer)
+    if id~=buffer or not is_valid then return false end
+
+    local history = utils.table.set_default(self._values, id)
+    update_history(id, history, {selection=selection})
+
+    local history = utils.table.set_default(buffer_history, id)
+    update_history(id, history, {selection=selection})
+    return true
+end
+
+function DefaultTarget:set_viewport(buffer, viewport)
+    local id, is_valid = kf.get_buffer(buffer)
+    if id~=buffer or not is_valid then return false end
+
+    local history = utils.table.set_default(self._values, id)
+    update_history(id, history, {viewport=viewport})
+
+    local history = utils.table.set_default(buffer_history, id)
+    update_history(id, history, {viewport=viewport})
+    return true
+end
+
+function DefaultTarget:set(values)
+    local id, is_valid
+    if values.buffer then
+        id, is_valid = kf.get_buffer(values.buffer)
+        if id~=buffer or not is_valid then
+            return false
         end
     else
-        buffer = vim.api.nvim_win_get_buf(window)
+        id = self._buffer
     end
 
-    return window, buffer
-end
-
-
-local module.default_target = {
--- TODO save buffer-wise history via ShaDa or similar
-    _buffer_history = {},
-    _window_history = {},
-}
-
-function module.default_target:get(opts)
-    local window, buffer = get_window_and_buffer(opts)
-
-    -- use window+buffer history if set, fall back to buffer history
-    local history = self._window_history[window]
-    if history then
-        history = self._window_history[buffer]
-    end
-    if not history then
-        history = self._buffer_history[buffer]
+    if values.selection and id~=values.selection.buffer then
+        return false
     end
 
-    local result = {window=window, buffer=buffer}
-
-    -- if no history then use generic defaults
-    if history then
-        result.selection = history.selection
-        result.viewport = vim.deepcopy(history.viewport)
-    else
-        result.selection = kf.selection(buffer, {})
-        result.viewport = NULL_VIEWPORT
+    if values.buffer then
+        self._buffer = id
     end
-    result.viewport.window = window
-    return result
-end
 
-function module.default_target:set_details(values)
-    local window, buffer = get_window_and_buffer(values)
+    local history = utils.table.set_default(self._values, id)
+    update_history(id, history, values)
 
-    local history = utils.table.set_default(utils.table.set_default(self._window_history, window), buffer)
-    update_details_dict(history, values)
-
-    history = utils.table.set_default(self._buffer_history, buffer)
-    update_details_dict(history, values)
+    local history = utils.table.set_default(buffer_history, id)
+    update_history(id, history, values)
     return true
 end
 
 
-
-local module.Target = utils.class()
-
-function module.Target:__init(opts)
-    if opts.default then
-        self._default = opts.default
-    else
-        self._default = module.default_target
+function module.get_default_target(window)
+    local window, is_valid = kf.get_window(window)
+    if not is_valid then
+        error("invalid window")
     end
 
-    if opts.preserve_default then
-        self._preserve_default = true
+    local target = default_target[window]
+    if not target then
+        target = DefaultTarget{window=window}
+        default_target[window] = target
     end
-
-    -- Set initial value so we can call self._get_default
-    self._is_valid_window = function() return true end
-    self._is_valid_buffer = self._is_valid_window
-    local default = self:_get_default(opts.buffer, opts.window)
-
-    self._window = default.window
-    self._buffers = {[default.window]=default.buffer}
-    self._details = {[default.window]={[default.buffer]={
-        selection=default.selection,
-        viewport=vim.deepcopy(default.viewport)
-    }}}
-
-    -- default if valid_windows not set: only current window is allowed
-    local valid_windows = opts.valid_windows or {self._window}
-    if vim.tbl_islist(valid_windows) then
-        valid_windows = utils.list.to_flags(valid_windows)
-        self._is_valid_window = function(w) return valid_windows[w] end
-    elseif utils.is_callable(valid_windows) then
-        self._is_valid_window = valid_windows
-    elseif valid_windows==true then
-        -- valid_windows==true means accept all, which is the current state
-    else
-        error("invalid window specification")
-    end
-
-    if not self._is_valid_window(default.window) then
-        error("invalid initial window")
-    end
-        
-    local valid_buffers = opts.valid_buffers or {default.buffer}
-    if vim.tbl_islist(valid_buffers) then
-        valid_buffers = utils.list.to_flags(valid_buffers)
-        self._is_valid_buffer = function(b) return valid_buffers[b] end
-    elseif utils.is_callable(valid_buffers) then
-        self._is_valid_buffer = valid_buffers
-    elseif valid_buffers==true then
-        -- valid_buffers==true means accept all, which is the current state
-    else
-        error("invalid buffer specification")
-    end
-
-    if not self._is_valid_buffer(default.buffer) then
-        error("invalid initial buffer")
-    end
+    return target
 end
 
 --[[
 
-We use _get_default to check if a buffer/window combination is valid, or get its valid completion,
-because a default value is required to exist in order for the combination to be valid
+Single fixed window target controller, for controlling
+    - which buffer is in window
+    - viewport
+    - selection
 
 --]]
-function module.Target:_get_default(buffer, window)
-    local is_valid, default
 
-    if type(window)=="number" and window>0 then
-        window, is_valid = kf.get_window(window)
-        is_valid = is_valid and self._is_valid_window(window)
+local module.TargetController = utils.class()
+
+function module.TargetController:__init(opts)
+    local window, is_valid = kf.get_window(window)
+    if not is_valid then
+        error("invalid window")
+    end
+    self._window = window
+
+    if opts.default then
+        self._default = opts.default
+    else
+        self._default = module.get_default_target(self._window)
     end
 
-    if not is_valid then
-        window = self._window
-        if not window then
-            default = self._default:get()
-            window = default.window
+    -- whether we write updates to the default target
+    if opts.preserve_default then
+        self._preserve_default = true
+    end
+
+    local default = self._default:get(opts.buffer)
+    if not default then
+        error("invalid buffer")
+    end
+
+    self._buffer = default.buffer
+    self._values = {[default.buffer]=default}
+
+    self._valid = {}
+    local valid_buffer = opts.valid_buffer
+    if valid_buffer==nil or valid_buffer==true then
+        -- default is that all buffers are allowed
+        valid_buffer = function() return true end
+    elseif opts.valid_buffer==false then
+        -- only initial buffer is allowed
+        valid_buffer={self._values.buffer}
+    end
+        
+    if vim.tbl_islist(valid_buffer) then
+        valid_buffer = utils.list.to_flags(valid_buffer)
+        self._valid.buffer = function(b) return valid_buffer[b] end
+    elseif utils.is_callable(valid_buffer) then
+        self._valid.buffer = valid_buffer
+    else
+        error("invalid buffer specification")
+    end
+
+    if utils.is_callable(opts.valid_viewport) then
+        self._valid.viewport = opts.valid_viewport
+    end
+
+    if utils.is_callable(opts.valid_selection) then
+        self._valid.selection = opts.valid_selection
+    end
+
+    for k,v in pairs(self._valid) do
+        if not v(self._values[k]) then
+            error("invalid initial "..k)
         end
     end
+end
+
+-- TODO validation of output of self._default:get ?
+
+function module.TargetController:_get_valid(buffer)
+    local is_valid
 
     if type(buffer)=="number" and buffer>0 then
         buffer, is_valid = kf.get_buffer(buffer)
-        is_valid = is_valid and self._is_valid_buffer(buffer, window)
+        is_valid = is_valid and self._valid.buffer(buffer)
     end
 
     if not is_valid then
-        buffer = self._buffer[window]
+        buffer = self._buffer
     end
 
-    if not (buffer and default and default.buffer==buffer) then
-        default = self._default:get{window=window, buffer=buffer}
-    end
-
-    return default
+    return buffer, is_valid
 end
 
-function module.Target:get(opts)
-    opts = opts or {}
-    local default = self:_get_default(opts.buffer, opts.window)
+function module.TargetController:get(buffer)
+    local id, is_valid = self:_get_valid(buffer)
 
-    local details = (self._details[default.window] or {})[default.buffer]
-    if not details then
-        details = default
-    end
-
-    return {
-        window=default.window,
-        buffer=default.buffer,
-        selection=details.selection,
-        viewport=vim.deepcopy(details.viewport)
-    }
-end
-
-function module.Target:set_window(window)
-    local default = self:_get_default(nil, window)
-    if default.window==window then
-        self._window = window
-        return true
-    end
-    return false
-end
-
-function module.Target:set_buffer(buffer, window)
-    local default = self:_get_default(buffer, window)
-    if (buffer==default.buffer) and ((not window) or window==default.window) then
-        self._buffer[default.window] = buffer
-        return true
-    end
-    return false
-end
-
-function module.Target:set_details(values)
-    -- TODO better selection/viewport validation?
-    if not (values.selection or values.viewport) then
-        error("no details given")
-    end
-
-    local default = self:_get_default(values.buffer, values.window)
-    if (values.buffer and values.buffer~=default.buffer) or
-        (values.window and values.window~=default.window) then
-        -- specified invalid non-default buffer/window combination
+    if buffer and not is_valid then
         return false
     end
 
-    local details = utils.table.set_default(utils.table.set_default(self._details, default.window), default.buffer)
-    if not details.selection then details.selection=default.selection end
-    if not details.viewport then details.viewport=vim.deepcopy(default.viewport) end
+    local values = self._values[id]
+    if not values then
+        values = self._default:get(id)
+    end
 
-    update_details_dict(details, values)
+    return {
+        buffer=id,
+        selection=values.selection,
+        viewport=vim.deepcopy(values.viewport)
+    }
+end
+
+function module.TargetController:set_buffer(buffer)
+    local id, is_valid = self:_get_valid(buffer)
+    if not is_valid then
+        return false
+    end
+
+    if not self._values[id] then
+        self._values[id] = self:_default:get(id)
+    end
+
+    self._buffer = id
+    return true
+end
+
+function module.TargetController:set_selection(selection)
+    local id, is_valid = self:_get_valid(selection.buffer)
+    if not is_valid then
+        return false
+    end
+
+    if self._valid.selection and not self._valid.selection(selection) then
+        return false
+    end
+
+    if not self._values[id] then
+        self._values[id] = self._default:get(id)
+    end
+
+    self._values[id].selection = selection
+    if not self._preserve_default then
+        self._default:set_selection(selection)
+    end
+    return true
+end
+
+function module.TargetController:set_viewport(buffer, viewport)
+    local id, is_valid = self:_get_valid(buffer)
+    if not is_valid then
+        return false
+    end
+
+    if self._valid.viewport and not self._valid.viewport(viewport) then
+        return false
+    end
+
+    if not self._values[id] then
+        self._values[id] = self._default:get(id)
+    end
+
+    self._values[id].viewport = viewport
 
     if not self._preserve_default then
-        self._default:set_details{
-            window=default.window,
-            buffer=default.buffer,
+        self._default:set_viewport(id, viewport)
+    end
+    return true
+end
+
+function module.TargetController:set(values)
+    local id, is_valid = self:_get_valid(values.buffer)
+
+    if values.selection then
+        if id~=values.selection.buffer or (self._valid.selection and not
+            self._valid.selection(selection)) then
+            return false
+        end
+    end
+
+    if values.viewport and self._valid.viewport and not self._valid.viewport(viewport) then
+        return false
+    end
+
+    if values.buffer then
+        if is_valid then
+            return false
+        else
+            self._buffer = id
+        end
+    end
+
+    if not self._values[id] then
+        self._values[id] = self._default:get(id)
+    end
+
+    if values.viewport then
+        self._values[id].viewport = values.viewport
+    end
+
+    if values.selection then
+        self._values[id].selection = values.selection
+    end
+
+    if not self._preserve_default then
+        self._default:set{buffer=id,
             selection=values.selection,
             viewport=values.viewport
         }
