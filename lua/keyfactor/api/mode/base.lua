@@ -1,100 +1,72 @@
 local module = {}
 
+module.events = {
+    start = {},
+    stop = {},
+    yield = {},
+    resume = {},
+    focus = {},
+    unfocus = {}
+}
+
 local modes = {}
 local first_branch = nil
 local last_branch = nil
 
--- ensures we are only doing one start/yield/stop at a time to keep state consistent
-local lock = false
+-- branch:
+--      { modes = {list of modes; lower index yields to higher index};
+--        prev = prev branch
+--        next = next branch
+--      }
 
-local function with_lock(callable)
-    return function(...)
-        if lock then
-            error("attempt to modify modes while modelock is active")
-        end
-
-        lock = true
-        local success, result = pcall(callable, ...)
-        lock = false
-
-        if success then
-            return result
-        else
-            error(result)
-        end
-    end
+local function validate_mode(mode)
+    -- TODO possibly more...
+    return type(mode)=="table"
 end
 
-local function clean_branch(branch)
-    -- last mode in branch is dead
-    -- remove it and try to resume parents until a resume is successful or branch is empty
-    local mode = table.remove(branch.modes)
-    local idx = modes[mode].index-1
-    modes[mode]=nil
-    kf.view.release_windows(mode)
-    while idx>0 do
-        mode = branch.modes[idx]
-        if (not mode._resume) or pcall(mode._resume, mode) then
-            -- successfully resumed mode
-            return true
-        end
-        -- failed to resume mode, remove it and try the next one
-        kf.view.release_windows(mode)
-        idx = idx-1
-        modes[mode]=nil
+local function notify_branch(branch, event)
+    for _,m in ipairs(branch.modes) do
+        kf.events.enqueue(m, event)
     end
-
-    -- ran out of branch modes without successfully resuming
-    -- remove the branch
-    if branch==first_branch then
-        first_branch = branch.next
-    else
-        branch.prev.next = branch.next
-    end
-
-    if branch==last_branch then
-        last_branch = branch.prev
-    else
-        branch.next.prev = branch.prev
-    end
-    return false
 end
 
 -- start mode on new branch
-module.start = with_lock(function(mode, focus)
+-- focus: boolean
+-- if true, start mode as first branch; if false start mode as last branch
+function module.start(mode, focus)
+    if not validate_mode(mode) or module.is_started(mode) then
+        error("cannot start invalid mode")
+    end
+
     local branch = {modes = {}}
     if focus then
-        if first_mode then
-            branch.next = first_mode
-            first_mode.prev = branch
+        if first_branch then
+            branch.next = first_branch
+            first_branch.prev = branch
         else
             last_mode = branch
         end
-        first_mode = branch
+        first_branch = branch
     else
         if last_mode then
             branch.prev = last_mode
             last_mode.next = branch
         else
-            first_mode = branch
+            first_branch = branch
         end
         last_mode = branch
     end
 
     branch.modes[1] = mode
-    if mode._start and not pcall(mode._start, mode) then
-        -- TODO log.warn("error while starting mode")
-        clean_branch(branch)
-        return false
+    kf.events.enqueue(mode, module.events.start)
+    if branch==first_branch then
+        kf.events.enqueue(mode, module.events.focus)
     end
+end
 
-    return true
-end)
-
-module.yield = with_lock(function(child, parent)
+function module.yield(child, parent)
     -- child must be mode object that is neither stopped nor started
-    if not child or module.is_started(child) then
-        -- TODO better validation
+    if not validate_mode(child) or module.is_started(child) then
         error("cannot yield to invalid child")
     end
 
@@ -107,37 +79,33 @@ module.yield = with_lock(function(child, parent)
     else
         branch = first_branch
         if not branch then
-            branch = init_branch(true)
+            module.start(child)
+            return
         end
     end
 
     local branch_len = #branch.modes
     if branch_len > 0 then
         parent = branch.modes[branch_len]
-        if parent._yield and not pcall(parent._yield, parent) then
-            -- TODO log.warn("error while yielding parent")
-            -- kill the parent
-            modes[parent] = nil
-            branch.modes[branch_len] = nil
-            branch_len = branch_len - 1
-        end
+        kf.events.enqueue(parent, module.events.yield)
     end
 
     branch_len = branch_len+1
     modes[child] = {branch=branch, index=branch_len}
     branch.modes[branch_len]=child
 
-    if child._start and not pcall(child._start, child) then
-        -- TODO log.warn("error while starting child")
-        clean_branch(branch)
-        return false
-    end
+    kf.events.enqueue(child, module.events.start)
+    if branch==first_branch then
+        kf.events.enqueue(child, module.events.focus)
+        if branch.next then
+            notify_branch(branch.next, module.events.unfocus)
+        end
 
-    return true
-end)
+    end
+end
 
 -- mode defaults to focus
-module.stop = with_lock(function(mode)
+function module.stop(mode)
     local branch, index
     if mode then
         record = modes[mode]
@@ -155,33 +123,44 @@ module.stop = with_lock(function(mode)
         mode = branch.modes[index]
     end
 
-    for i=#branch.modes, index+1, -1 do
+    for i=#branch.modes, index, -1 do
         -- from end of branch down to child of mode
         local m = branch.modes[i]
-        if m._stop and not pcall(m._stop, m) then
-            -- TODO log.warn
-        end
-        kf.view.release_windows(m)
         modes[m]=nil
         branch.modes[i]=nil
+        kf.events.enqueue(m, module.events.stop)
     end
 
-    if mode._stop and not pcall(mode._stop, mode) then
-        -- TODO log.warn
-    end
-    kf.view.release_windows(mode)
-    clean_branch(branch)
-    return true
-end)
+    if index==0 then
+        -- remove the branch
+        if branch==first_branch then
+            first_branch = branch.next
+            if first_branch then
+                notify_branch(first_branch, module.events.focus)
+            end
+        else
+            branch.prev.next = branch.next
+        end
 
-module.set_focus = with_lock(function(mode)
+        if branch==last_branch then
+            last_branch = branch.prev
+        else
+            branch.next.prev = branch.prev
+        end
+    else
+        -- resume the parent
+        kf.events.enqueue(branch.modes[index-1], module.events.resume)
+    end
+end
+
+function module.set_focus(mode)
     local branch = (modes[mode] or {}).branch
     if not branch then
         error("cannot set focus to invalid mode")
     end
 
     if branch==first_branch then
-        return true
+        return
     end
 
     branch.prev.next = branch.next
@@ -195,69 +174,23 @@ module.set_focus = with_lock(function(mode)
     branch.next=first_branch
     first_branch.prev = branch
     first_branch = branch
-
-    return true
-end)
-
-function module.is_locked()
-    return lock
+    notify_branch(first_branch, module.events.focus)
+    notify_branch(first_branch.next, module.events.unfocus)
 end
 
-function module.is_focus(mode)
+
+
+
+function module.is_focus_branch(mode)
     local record = modes[mode]
     return (not not record) and (record.branch==first_branch)
 end
 
-module.get_current_focus = function()
+function module.get_focus()
     if not first_branch then
         return nil
     end
     return first_branch.modes[#first_branch.modes]
-end
-
-local function get_normal_window()
-    local win = vim.api.nvim_get_current_win()
-    if vim.fn.win_gettype(win)=="" then
-        return win
-    end
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if vim.fn.win_gettype(win)=="" then
-            return win
-        end
-    end
-    for _, win in ipairs(vim.api.nvim_list_wins()) do
-        if vim.fn.win_gettype(win)=="" then
-            return win
-        end
-    end
-end
-
--- requires modelock
-module.get_focus = with_lock(function ()
-    local focus = module.get_current_focus()
-    if focus then return focus end
-
-    local win = get_normal_window()
-    if not win then
-        error("no active modes and no normal windows open")
-    end
-    -- TODO allow all buffers
-    local mode = module.Edit{target={window=win}}
-
-    if first_branch then
-        -- this should never happen; means first_branch is empty but has not been removed
-        -- TODO log debug info
-    else
-        first_branch = {modes={}}
-        last_branch = first_branch
-    end
-    first_branch.modes[1] = mode
-    modes[mode]={branch=first_branch, index=1}
-    if mode._start and not pcall(mode._start, mode) then
-        clean_branch(branch)
-        error("error starting new focus")
-    end
-    return mode
 end
 
 function module.is_started(mode)
@@ -297,16 +230,8 @@ function module.list_branches()
     return result
 end
 
-function module.lock_schedule(callback)
-    vim.schedule(function()
-        if lock then
-            error("modelock is deadlocked")
-        end
-        lock = true
-        callback()
-        lock = false
-    end)
-end
+
+
 
 module.Edit = utils.class()
 
