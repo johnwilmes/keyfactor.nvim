@@ -109,8 +109,13 @@ local function get_page(handle)
     return modes[handle]
 end
 
-local function get_mode()
-    return focus_page and focus_page.modes[1]
+-- handle is tabpage handle or page handle (or nil or 0 for focus page)
+-- returns first mode of that page, if any
+local function get_mode(handle)
+    local record = get_page_record(handle)
+    if record then
+        return record.modes[1]
+    end
 end
 
 local function get_prompt()
