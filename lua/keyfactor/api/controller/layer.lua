@@ -123,4 +123,5 @@ function module.LayerController:set_groups(groups)
             self._layers[layer]=true
         end
     end
+    return true
 end

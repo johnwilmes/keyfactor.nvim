@@ -1,40 +1,54 @@
-local module
+local kf = require("keyfactor.api")
 
-module.PromptController = utils.class()
+local PromptController = utils.class()
 
-function module.PromptController:__init(opts)
-    self._accepted = false
+function PromptController:get_value()
+    return nil
 end
 
-function module.PromptController:is_accepted()
-    return self._accepted
+function PromptController:accept()
+    kf.events.broadcast(self, kf.events.prompt.accept, {accept=true, value=self:get_value()})
 end
 
-function module.PromptController:accept()
-    self._accepted=true
+function module.PromptController:cancel()
+    kf.events.broadcast(self, kf.events.prompt.cancel, {accept=false, value=self:get_value()})
 end
 
-module.GetKeyController = utils.class(module.PromptController)
+local GetKeyController = utils.class(PromptController)
 
 function module.GetKeyController:__init(opts)
-    self._accepted = false
-    self._keys = {}
+    self._key = nil
 end
 
-function module.GetKeyController:is_accepted()
-    return self._accepted
-end
-
-function module.GetKeyController:accept()
-    self._accepted=true
-end
-
-function module.GetKeyController:get_keys()
-    return vim.deepcopy(self._keys)
+function module.GetKeyController:get_value()
+    return vim.deepcopy(self._key)
 end
 
 function module.GetKeyController:push_key(key)
-    self._keys[#self._keys]=key
+    self._key = key
+    self:accept()
 end
+
+local TextPromptController = utils.class(PromptController)
+
+function TextPromptController:__init(opts)
+    local buffer, is_valid = kf.get_buffer(opts.buffer)
+    if not is_valid then
+        error("invalid initial buffer")
+    end
+    self.buffer = buffer
+end
+
+function TextPromptController:get_value()
+    local lines = vim.api.nvim_buf_get_lines(self.buffer, 0, 1, false)
+    return lines[1]
+end
+
+
+local module = {
+    events = events,
+    PromptController = PromptController,
+    GetKeyController = GetKeyController,
+}
 
 return module

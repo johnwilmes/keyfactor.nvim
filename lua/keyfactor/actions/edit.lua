@@ -11,7 +11,7 @@ local kf = require("keyfactor.api")
         overflow
         offset
         align_focus
-    scroll
+    follow
 
 
     overflow = {selection = strategy_name, register = strategy_name}
@@ -24,17 +24,19 @@ local kf = require("keyfactor.api")
         
 --]]
 module.paste = kf.binding.action(function(params)
-    local mode, orientation, register = kf.fill(params, "mode", "orientation", "register")
-    if not mode.edit then
-        return nil
+    local mode, orientation, register, follow = kf.fill(params, "mode", "orientation", "register", "follow")
+    if (not mode.target) or mode.target.read_only then
+        -- TODO notify warning?
+        return
     end
 
-    local target = mode.edit:get()
-    local selection = target.selection
+    local selection = mode.target:get()
     local text = kf.register.read(register.name, register.entry)
 
     selection, text = selection:align_with(text, register)
 
+    -- TODO if target.single_line then compress text to one line?
+    -- TODO don't allow linewise if target.single_line?
     if params.linewise then
         local before = orientation.side=="before"
         selection = kf.edit.paste_lines(selection, orientation, text, before)
@@ -43,19 +45,9 @@ module.paste = kf.binding.action(function(params)
         selection = kf.edit.replace(selection, text)
     end
 
-    local viewport
-    if target.viewport and params.scroll~=false then
-        local position = selection:get_focus()[orientation]
-        viewport = kf.viewport.scroll_to_position(target.viewport, position)
-    end
+    mode.target:set(selection)
 
-    mode.edit:set_details{
-        window=target.window,
-        buffer=target.buffer,
-        selection=selection,
-        viewport=viewport
-    }
-
+    if follow then kf.follow_target(mode, orientation) end
 end)
 
 --[[
@@ -74,32 +66,24 @@ end
 
 
 --[[
-    orientation (only for scrolling)
     register (name)
     linewise
-    scroll
+    follow
+    orientation (only for follow)
 ]]
 module.copy = kf.binding.action(function(params)
-    local mode, register = kf.fill(params, "mode", "register")
-    if not mode.edit then
-        return nil
+    local mode, register, follow = kf.fill(params, "mode", "register", "follow")
+    if (not mode.target) then
+        -- TODO notify warning?
+        return
     end
 
-    local target = mode.edit:get()
-    local selection = target.selection
+    local selection = mode.target:get()
     if selection.length==0 then return end
 
     do_yank(selection, register.name, params.linewise)
 
-    if target.viewport and params.scroll~=false then
-        local position = selection:get_focus()[orientation]
-        local viewport = kf.viewport.scroll_to_position(target.viewport, position)
-        mode.edit:set_details{
-            window=target.window,
-            buffer=target.buffer,
-            viewport=viewport
-        }
-    end
+    if follow then kf.follow_target(mode, kf.fill(params, "orientation")) end
 end)
 
 --[[
@@ -109,16 +93,16 @@ end)
     register
         name
         (entry)
-    scroll
+    follow
 ]]
 module.cut = kf.binding.action(function(params)
-    local mode, orientation, register = kf.fill(params, "mode", "orientation", "register")
-    if not mode.edit then
-        return nil
+    local mode, orientation, register, follow = kf.fill(params, "mode", "orientation", "register", "follow")
+    if (not mode.target) or mode.target.read_only then
+        -- TODO notify warning?
+        return
     end
 
-    local target = mode.edit:get()
-    local selection = target.selection
+    local selection = mode.target:get()
     if selection.length==0 then return end
 
     do_yank(selection, register.name, params.linewise)
@@ -129,20 +113,12 @@ module.cut = kf.binding.action(function(params)
     else
         selection = kf.edit.delete(selection, orientation.boundary)
     end
+    -- TODO if mode.target.single_line, and n_lines is 0, add an empty line?
+    -- (is it even possible to have no lines in a vim buffer?)
 
-    local viewport
-    if target.viewport and params.scroll~=false then
-        local position = selection:get_focus()[orientation]
-        viewport = kf.viewport.scroll_to_position(target.viewport, position)
-    end
+    mode.target:set(selection)
 
-    mode.edit:set_details{
-        window=target.window,
-        buffer=target.buffer,
-        selection=selection,
-        viewport=viewport
-    }
-
+    if follow then kf.follow_target(mode, orientation) end
 end)
 
 --[[
@@ -151,20 +127,20 @@ end)
     orientation
     reverse
     join -- whether to join lines when deleting beginning/end of line
-    scroll
+    follow
 --]]
 module.trim = kf.binding.action(function(params)
     local mode, orientation = kf.fill(params, "mode", "orientation")
-    if not mode.edit then
-        return nil
+    if (not mode.target) or mode.target.read_only then
+        -- TODO notify warning?
+        return
     end
 
-    local target = mode.edit:get()
-    local selection = target.selection
+    local selection = mode.target:get()
     if selection.length==0 then return end
 
     -- TODO test join for extrange safety?
-    vim.api.nvim_buf_call(target.buffer, function()
+    vim.api.nvim_buf_call(selection.buffer, function()
         -- use nvim_buf_call in case we need to use :join
         for idx, range in selection:iter() do
             local pos=range[params.orientation]
@@ -195,46 +171,64 @@ module.trim = kf.binding.action(function(params)
         end
     end)
 
-    if target.viewport and params.scroll~=false then
-        local position = selection:get_focus()[orientation]
-        local viewport = kf.viewport.scroll_to_position(target.viewport, position)
-        mode.edit:set_details{
-            window=target.window,
-            buffer=target.buffer,
-            viewport=viewport
-        }
-    end
+    if follow then kf.follow_target(mode, orientation) end
 end)
 
 --[[
     reverse - true means *redo*, false means undo (default)
     keep_selection - false means also revert to corresponding selection, true means maintain current selection
+    follow (+ orientation)
 ]]
-module.undo = binding.action(function(params)
+module.undo = kf.binding.action(function(params)
     local mode = kf.fill(params, "mode")
-    if not mode.edit then
-        return nil
+    if (not mode.target) or mode.target.read_only then
+        -- TODO notify warning?
+        return
     end
 
-    local target = mode.edit:get()
-    local selection
+    local selection = mode.target:get()
 
     local offset = (params.reverse and 1) or -1
-    local node, actual = kf.undo.get_node(target.buffer, offset)
+    local node, actual = kf.undo.get_node(selection.buffer, offset)
     if actual==offset then
-        selection = kf.undo.revert(target.buffer, node)
-        if params.keep_selection then
-            selection=nil
+        selection = kf.undo.revert(selection.buffer, node)
+        if not params.keep_selection then
+            mode.target:set(selection)
         end
     end
 
-    if selection then
-        mode.edit:set_details{
-            window=target.window,
-            buffer=target.buffer,
-            selection=selection,
-        }
-    end
+    if follow then kf.follow_target(mode, kf.fill(params, "orientation")) end
 end)
+
+-- TODO `wring`-able change buffer
+
+--[[
+    params:
+        path
+        prompt
+]]
+local change_buffer = kf.binding.action(function(params)
+    local mode = kf.fill(params, "mode")
+
+    if not mode.target then
+        return
+    end
+
+    if not path and not prompt then
+        prompt = --TODO default prompt
+    end
+
+    if prompt then
+        -- start prompt mode
+        -- set initial prompt text to path or ""
+        -- on prompt accept:
+            -- actually change the target
+    end
+
+    local buffer = vim.fn.bufadd(path)
+    vim.api.nvim_buf_set_option(buffer, 'buflisted', true)
+    target:set_buffer(buffer)
+end)
+
 
 return module

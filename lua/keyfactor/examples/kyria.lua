@@ -11,12 +11,13 @@ settings.keys = {
 }
 
 settings.layers = {
-    "universal", "normal", "insert", "prompt", "getkey",
+    "normal", "insert", "getkey", "prompt", "universal",
     groups = {
-        normal={base="normal", "universal"},
-        insert={base="insert", "universal"},
-        prompt={base="prompt", "universal", "getkey"},
-    }
+        normal={base={"normal", "universal"}},
+        insert={base={"insert", "universal"}},
+        prompt={base={"prompt", "universal"}, "getkey"},
+    },
+    base="universal",
 }
 
 settings.orientation = {boundary="inner", side="after"}
@@ -38,12 +39,10 @@ local selection = go.select.textobject:bind{
     reversible,
     augment=on.control,
     partial=on.alt,
-    textobject=outer.textobject,
 }
 
 local direction = go.select.direction:bind{
     augment=on.shift,
-    direction=outer.direction,
 }
 
 local nav = map(on.control:bind(
@@ -80,10 +79,9 @@ settings.maps.normal = map{
     -- individual ranges from current mark:
     --mark=selection{textobject=textobjects.mark:bind{name=get.local("default_mark")}},
 
-    -- textobjects.char - by default, get pattern from (outer) params.prompt.value; either
-    -- prompt.char or textobjects.char can default with case where prompt is empty accept
-    char=go.prompt.char:pass{accept=selection:bind{textobject=textobjects.char}},
-    search=go.prompt.search:pass{accept=selection:bind{textobject=textobjects.search}},
+    -- prompt.char calls accept with {textobject=textobjects.char(prompt:get_value().printable)}
+    char=go.mode.char:bind{accept=selection},
+    search=go.mode.search:bind{accept=selection},
 
     delete=go.trim:bind{point_operator},
     backspace=go.trim:bind{point_operator, reverse=true},
@@ -125,14 +123,11 @@ settings.maps.insert = map_first{
 -- PROMPT LAYERS
 settings.maps.prompt = map{
     enter=go.prompt.accept,
+    esc=go.prompt.cancel,
 }
 
 settings.maps.getkey = map_first{
-    {
-        enter=go.prompt.accept, -- use prompt will use default value
-        esc=go.mode.stop,
-    },
-    go.prompt.getkey
+    go.prompt.push_key
 }
 
 return settings

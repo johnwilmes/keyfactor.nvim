@@ -1,5 +1,3 @@
-local module = {}
-
 --[[
 
 Pages:
@@ -31,14 +29,14 @@ Focus:
 
 
 local modes = {} -- maps mode object to page
-
 local pages = {} -- maps either tabpage handle or page object to page record
     -- {page=page, tab=tab, modes=<list of modes>}
 local focus_page = nil -- record of focus page
-
 local prompts = {} -- stack of active prompts
 
 local lock = false
+
+local autocmds = {}
 
 --[[ Internal functions ]]
 
@@ -390,5 +388,9 @@ local stop_prompt = with_lock(function(all)
         kf.enqueue(prompt, kf.events.prompt.stop)
     end
 end)
+
+
+local module = {
+}
 
 return module

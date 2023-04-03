@@ -1,0 +1,5 @@
+combining macros, insert undo merge, trim merging, etc.:
+    - "sequence" param that is used by bindings like 'map' (not by the actions themselves)
+    that grabs the bound action and when called adds them to appropriate sequence
+
+

@@ -1,24 +1,32 @@
 local module = {}
 
-local binding = require("keyfactor.binding")
+local kf = require("keyfactor.api")
 
-module.accept = binding.action(function(mode, _)
+module.accept = kf.binding.action(function(params)
+    local mode = kf.fill(params, "mode")
     local prompt = mode.prompt
-    if prompt then
-        prompt:accept()
-        if kf.mode.is_started(mode) then kf.mode.stop(mode) end
+    if prompt and prompt:is_active() then
+        mode.prompt:accept()
     end
-end, {})
+end)
+
+module.cancel = kf.binding.action(function(params)
+    local mode = kf.fill(params, "mode")
+    local prompt = mode.prompt
+    if prompt and prompt:is_active() then
+        mode.prompt:cancel()
+    end
+end)
 
 --[[
     params: key
 ]]
-module.push_key = binding.action(function(mode, params)
+module.push_key = kf.binding.action(function(params)
+    local mode = kf.fill(params, "mode")
     local prompt = mode.prompt
-    if prompt and prompt.push_key and params.key then
+    if prompt and prompt:is_active() and prompt.push_key and params.key then
         prompt:push_key(params.key)
-        module.accept(mode)
     end
-end, {})
+end)
 
 return module

@@ -1,4 +1,4 @@
-local function scroll(view, viewport, action)
+local function scroll(view, index, action)
     local callable
     local arg
     if type(action)=="string" then
@@ -13,7 +13,7 @@ local function scroll(view, viewport, action)
     end
 
     local wm = kf.get_window_manager()
-    local window = wm.get_window(view, viewport)
+    local window = wm:get_window(view, index)
     if not window then
         -- TODO log message, can't scroll without window
         return
@@ -26,7 +26,7 @@ local function scroll(view, viewport, action)
         saveview = vim.fn.winsaveview()
     end)
 
-    view.set{[viewport]={view=saveview}}
+    view:set{[index]={view=saveview}}
 end
 
 return {scroll=scroll}

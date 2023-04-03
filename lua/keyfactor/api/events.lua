@@ -23,7 +23,7 @@ local attached = {}
 
 --[[ keys are attachment handles, values are tables
 --      source = source
---      events = {[event]=true}
+--      event = {[evt]=true}
 --      once = boolean
 --]]
 local index = {}
@@ -75,8 +75,8 @@ function module.enqueue(source, event, details)
 end
 
 --[[
-    listener (callable)
     opts
+        listener (callable)
         source
         event
         object (default listener)
@@ -89,25 +89,25 @@ end
     listener will receive
         listener(object, source, event, details)
 --]]
-function module.attach(listener, opts)
-    if not utils.is_callable(listener) then
+function module.attach(opts)
+    if not utils.is_callable(opts.listener) then
         error("invalid listener")
     end
-    local object = opts.object or listener
-    local events
-    if vim.tbl_islist(opts.events) and #events>0 then
-        events = utils.list.to_flags(opts.events)
-    elseif type(opts.events="table") then
-        events = {[opts.events]=true}
+    local object = opts.object or opts.listener
+    local event
+    if vim.tbl_islist(opts.event) and #event>0 then
+        event = utils.list.to_flags(opts.event)
+    elseif type(opts.event="table") then
+        event = {[opts.event]=true}
     else
-        events = {[nil]=true}
+        event = {[nil]=true}
     end
 
     local source
     if type(opts.source)=="table" then
         source=opts.source
     elseif not opts.source then
-        if type(opts.events)~="table" then
+        if type(opts.event)~="table" then
             error("valid source or event required")
         end
         source = nil
@@ -117,10 +117,10 @@ function module.attach(listener, opts)
 
 
     local handle = #index+1
-    index[handle] = {source=source, events=events, once=not not opts.once}
+    index[handle] = {source=source, event=event, once=not not opts.once}
     local source_listeners = utils.table.set_default(attached, source)
-    local listener = {callable=listener, object=object}
-    for e,_ in pairs(events) do
+    local listener = {callable=opts.listener, object=object}
+    for e,_ in pairs(event) do
         local event_listeners = utils.table.set_default(source_listeners, e)
         event_listeners[handle]=listener
     end
@@ -133,7 +133,7 @@ function module.detach(handle)
         index[handle]=nil
         local source_listeners = attached[listener.source]
         if source_listeners then
-            for e,_ in pairs(listener.events) do
+            for e,_ in pairs(listener.event) do
                 event_listeners = source_listeners[e]
                 if event_listeners then
                     event_listeners[handle]=nil
@@ -170,19 +170,19 @@ function module.clear(source, opts)
     local event
 
     if type(opts.event)=="table" then
-        if #events==0 then
-            -- opts.events is a specific event
-            events = {[opts.events]=true}
+        if #event==0 then
+            -- opts.event is a specific event
+            event = {[opts.event]=true}
         else
-            events = utils.list.to_flags(opts.events)
+            event = utils.list.to_flags(opts.event)
         end
-    elseif not events then
-        events = {[nil]=true}
+    elseif not event then
+        event = {[nil]=true}
     else
-        events = utils.list.to_flags(utils.table.keys(listeners))
+        event = utils.list.to_flags(utils.table.keys(listeners))
     end
 
-    for e,_ in pairs(events) do
+    for e,_ in pairs(event) do
         local event_listeners = listeners[e]
         for h,l in pairs(event_listeners) do
             if (opts.object==nil or opts.object==l.object) and
@@ -190,8 +190,8 @@ function module.clear(source, opts)
                 event_listeners[h]=nil
                 l_index = index[h]
                 if l_index then
-                    l_index.events[e]=nil
-                    if vim.tbl_isempty(l_index.events) then
+                    l_index.event[e]=nil
+                    if vim.tbl_isempty(l_index.event) then
                         index[h]=nil
                     end
                 end

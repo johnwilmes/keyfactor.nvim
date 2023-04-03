@@ -75,7 +75,6 @@ function module.vim(selection, target, value)
     -- TODO make sure "start" is in backspace
 
     vim.api.nvim_buf_call(selection.buffer, function()
-        local view = vim.fn.winsaveview()
         for idx, range in selection:iter() do
             local gravity = kf.selection.active_gravity[target]
             selection:set_gravity(sel_idx, gravity)
@@ -88,7 +87,6 @@ function module.vim(selection, target, value)
                 vim.cmd("normal! a"..value)
             end
         end
-        vim.fn.winrestview(view)
     end)
     return selection
 end

@@ -69,7 +69,7 @@ module.scroll = kf.binding.action(function(params)
         cmd = count..cmd
     end
 
-    local viewports = mode.view:get_viewports()
+    local viewports = mode.view:get()
     local index = params.view
     local viewport = viewports[index]
 
@@ -80,7 +80,7 @@ module.scroll = kf.binding.action(function(params)
             -- and call view:set with the result
         -- otherwise, for pagewise scroll, just guess the number of lines
 
-        for i,v in ipairs(mode.view:get_viewports()) do
+        for i,v in ipairs(viewports) do
             if v.scroll==axis or v.scroll=="both" then
                 index = i
                 viewport = v
@@ -94,7 +94,7 @@ module.scroll = kf.binding.action(function(params)
         return
     end
 
-    kf.scroll(view, index, cmd)
+    kf.view.scroll(mode.view, index, cmd)
 end)
 
 

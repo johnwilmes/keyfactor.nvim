@@ -119,128 +119,61 @@ function utils.range_contains(range1, range2)
     return utils.position_less_equal(range1[1], range2[1]) and utils.position_less_equal(range2[2], range1[2])
 end
 
-function utils.mapping_encode(key, modifiers)
-    local config = require("keyfactor.config")
+--TODO ffi library is a more appropriate way of doing this (ffi.new() makes a cdata that is garbage
+--collected, can set the finalizer)
+function utils.set_finalizer(obj, finalizer, name)
+    name = name or "__gc_proxy" -- TODO magic constant
+    local proxy = newproxy(true)
+    debug.getmetatable(proxy).__gc = finalizer
+    rawset(obj, name, proxy)
+end
 
-    modifiers = modifiers or {}
-    if modifiers.S and #key == 1 then
-        local index , _ = config.unshifted:find(key)
-        if index then
-            key = config.shifted:sub(index,index)
-            modifiers.S = nil
+-- Object model
+local oo = require("loop.simple")
+
+local function yieldsupers(topdown, class)
+    if class~=nil then
+        if topdown then
+            yieldsupers(topdown, oo.getsuper(class))
+            coroutine.yield(class)
+        else
+            coroutine.yield(class)
+            yieldsupers(topdown, oo.getsuper(class))
         end
     end
-
-    local sys_encoded = config.system_encode(key, modifiers)
-    if sys_encoded then return sys_encoded end
-    if vim.tbl_isempty(modifiers) then return key end
-
-    if #key == 1 then
-        key = ("<%s>"):format(key)
-    end
-    for mod, _ in pairs(modifiers) do
-        key = ("<%s-%s"):format(mod, key:sub(2))
-    end
-    return key
 end
 
-function utils.mode_in(modes)
-    -- valid chars for modes: citnosx
-    current = vim.api.nvim_get_mode()["mode"]
-    if current:sub(1,2) == 'no' then
-        current = 'o'
-    elseif (current:sub(1,1) == 'v' or
-            current:sub(1,1) == 'V' or
-            current:sub(1,1) == CTRL_V) then
-        current = 'x'
-    elseif (current:sub(1,1) == 's' or
-            current:sub(1,1) == 'S' or
-            current:sub(1,1) == CTRL_S) then
-        current = 's'
-    else
-        current = current:sub(1,1)
-    end
-    if modes:find(current) then
-        return true
-    end
-    return false
+local function topdown(class)
+    return coroutine.wrap(yieldsupers), true, class
 end
 
-local motion_types = {
-    char = {visual_mode='v', select_mode='s'},
-    line = {visual_mode='V', select_mode='S'},
-    block = {visual_mode=CTRL_V, select_mode=CTRL_S},
-}
-for name, obj in pairs(motion_types) do
-    obj.name = name
+local function bottomup(class)
+    return coroutine.wrap(yieldsupers), false, class
 end
 
-local function motion_type_from_string(s)
-    for name, obj in pairs(motion_types) do
-        if s == name or s == name:sub(1,1) or s == obj.visual_mode or s == obj.select_mode then
-            return obj
-        end
+
+local BaseClass = oo.class()
+function BaseClass.__new(class, ...)
+    local obj = oo.rawnew(class)
+    for class in topdown(class) do
+        local init = oo.getmember(class, "__init")
+        if init ~= nil then init(obj, ...) end
     end
-    error("Unrecognized motion type")
+    utils.set_finalizer(obj, BaseClass.__gc)
+    return obj
 end
 
-local function motion_type_from_mode()
-    local mode = vim.api.nvim_get_mode()["mode"]
-    if mode:sub(1,2) == 'no' then
-        return module.motion_type.from_string(mode:sub(3,3))
-    else
-        return module.motion_type.from_string(mode:sub(1,1))
+function BaseClass:__gc()
+    for class in bottomup(oo.getclass(self)) do
+        local del = oo.getmember(class, "__del")
+        if del ~= nil then del(self) end
     end
 end
 
-function utils.get_motion_type(s)
-    if s then
-        return motion_type_from_string(s)
-    else
-        return motion_type_from_mode()
-    end
+function utils.class(super)
+    super = super or BaseClass
+    return oo.class({}, super)
 end
-
-function utils.exit_visual()
-    if utils.mode_in('x') then
-        vim.cmd('normal! '..utils.get_motion_type().visual_mode)
-    end
-end
-
-function utils.operate(operator, left, right, motion_type, count, register, remap)
-    local visual_start = vim.api.nvim_buf_get_mark(0, '<')
-    local visual_end = vim.api.nvim_buf_get_mark(0, '>')
-
-    vim.api.nvim_buf_set_mark(0, '[', left[1], left[2], {})
-    vim.api.nvim_buf_set_mark(0, ']', right[1], right[2], {})
-    if remap or (operator:lower():sub(1, #'<plug>') == '<plug>') then
-        remap = ''
-    else
-        remap = '!'
-    end
-    if motion_type.name == 'block' then
-        motion_type = '<C-v>'
-    else
-        motion_type = motion_type.visual_mode
-    end
-    if count then
-        count = tostring(count)
-    else
-        count = ''
-    end
-    if register then
-        register = '"'..register
-    else
-        register = ''
-    end
-
-    local cmd = [[normal%s %s<Cmd>normal! %s`[o`]%s%s<CR>]]
-    cmd = cmd:format(remap, operator, motion_type, count, register)
-    cmd = vim.api.nvim_replace_termcodes(cmd, true, true, true)
-    vim.cmd(cmd)
-
-    vim.api.nvim_buf_set_mark(0, '<', visual_start[1], visual_start[2], {})
-    vim.api.nvim_buf_set_mark(0, '>', visual_end[1], visual_end[2], {})
-end
+function utils.super(obj) return oo.getsuper(oo.getclass(obj)) end
 
 return utils

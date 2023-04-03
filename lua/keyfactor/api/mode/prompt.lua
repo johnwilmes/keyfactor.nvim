@@ -1,108 +1,68 @@
-local module = {}
+local utils = require("keyfactor.utils")
+local kf = require("keyfactor.api")
 
-module.TextPrompt = utils.class()
-function module.Search:__init(opts)
-    local default_layers = {
-        groups={"normal", "insert", "prompt"},
-    }
-    self._layer_init = opts.layers or default_layers
+local function on_search_complete(mode, prompt, event, details)
+    kf.mode.stop(mode)
+    if details.accept then
+        -- TODO
+    end
 end
 
-function module.TextPrompt:get_targets()
-    if self.edit then
-        return {self.edit:get()}
-    end
-    return {}
-end
+local Search = utils.class()
 
-function module.TextPrompt:_start()
-    if self._started then
-        error("already started")
-    end
+function Search:__init(opts)
+    local search_buffer, is_valid = kf.get_buffer(opts.buffer)
+    if not is_valid then search_buffer = nil end
+
     self._prompt_buffer = vim.api.nvim_create_buf(false, true)
-    -- TODO set buffer property: single line
-    self._prompt_window = kf.layout.create_window{style="prompt", anchor=self._target.window}
+    self.target =  kf.controller.Target{buffer=self._prompt_buffer}
 
-    self.edit = kf.controller.Target{buffer=self._prompt_buffer, window=self._prompt_window}
-    self.layers = kf.controller.Layers(self._layer_init)
-    self.prompt = kf.controller.PromptController()
-
-    self._started = true
-end
-
-
-
-
-
-
-module.Search = utils.class(module.TextPrompt)
-
-function module.Search:__init(opts)
-    -- TODO validate
-    self._target = opts.target
-end
-
-function module.Search:_start()
-    if self._started then
-        error("already started")
+    local layer_init = opts.layers
+    if not layer_init then
+        layer_init = {
+            groups={"normal"}, -- TODO this is the initial group setting
+                -- TODO all groups should be valid by default
+        }
     end
-    self._search_buffer = vim.api.nvim_create_buf(false, true)
-    self._search_window = kf.layout.create_window{style="prompt", anchor=self._target.window}
-    self.result = {}
+    self.layers = kf.controller.Layers(layer_init)
+    self.prompt = kf.controller.TextPrompt({buffer=self._prompt_buffer})
+    self._event_handle = kf.events.attach(on_search_complete, {event={kf.events.prompt.accept, kf.events.prompt.cancel}, source=self.prompt, object=self})
 
-    self.edit = kf.controller.Target{buffer=self._search_buffer, window=self._search_window}
-    -- TODO fix reinsert/history target for insert
-    self.insert = kf.controller.Insert{target=self.edit}
-    self.layers = kf.controller.Layers(self._layer_init)
-    self.prompt = kf.controller.PromptController()
-
+    self.view = kf.view.SearchView({target=self.target, search=search_buffer})
     -- TODO completion controller?
-
-    self._started = true
+    -- TODO self.status
 end
 
-function module.Search:_stop()
-    if self._started then
-        local lines = vim.api.nvim_buf_get_lines(self._search_buffer, 0, 1, false)
-        self.result.text = lines[1] or ""
-        self.result.accept = self.prompt:is_accepted()
+function Search:__gc()
+    kf.events.detach(self._event_handle)
+    vim.api.nvim_buf_delete(self._prompt_buffer, {force=true})
+end
 
-        if self.insert then
-            self.insert:commit()
-        end
 
-        -- TODO self.result.text gets pushed to search history
-
-        self.edit = nil
-        self.insert = nil
-        self.layers = nil
-        self.prompt = nil
-
-        kf.layout.release_window(self._search_window)
-        vim.api.nvim_buf_delete(self._search_buffer, {force=true})
-        self._started = false
+local function on_get_key(mode, prompt, event, details)
+    kf.mode.stop(mode)
+    if details.accept then
+        -- TODO
     end
 end
 
-module.GetKey = utils.class()
+local GetKey = utils.class()
 
-function module.GetKey:__init(opts)
-end
-
-function module.GetKey:_start()
+function GetKey:__init(opts)
     self.layers = kf.controller.Layers{groups={prompt=true}, layers={getkey=true}}
     self.prompt = kf.controller.GetKey()
+    self._event_handle = kf.events.attach(on_get_key,
+    {event={kf.events.prompt.accept, kf.events.prompt.cancel}, source=self.prompt, object=self})
+    -- TODO self.status
 end
 
-function module.GetKey:_stop()
-    if self.prompt then
-        self.result = {
-            keys = self.prompt:get_keys(),
-            accept = self.prompt:is_accepted()
-        }
-        self.layers = nil
-        self.prompt = nil
-    end
+function GetKey:__gc()
+    kf.events.detach(self._event_handle)
 end
 
+local module = {
+    Search=Search,
+    GetKey=GetKey
+}
 
+return module
